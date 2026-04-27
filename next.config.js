@@ -1,12 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    appDir: true,
-  },
+  // Next.js 14 — appDir is stable, no longer experimental
   env: {
-    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV || 'development',
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://nykppjttxexgrmtnxvje.supabase.co',
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55a3BwanR0eGV4Z3JtdG54dmplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyOTA3NjksImV4cCI6MjA5Mjg2Njc2OX0.QD6oy_wJrTC1DHlftSwfr_evIgTeJIKgaI3zIK9dRBg',
+    NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV || 'production',
+    NEXT_PUBLIC_APP_NAME: 'NEXUS ALPHA',
   },
   webpack: (config) => {
     // Optimize for real-time updates with lightweight-charts
