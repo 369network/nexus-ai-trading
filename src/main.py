@@ -43,6 +43,7 @@ from src.strategies.signal_fusion import SignalFusionEngine
 from src.strategies.edge_filter import EdgeFilter
 from src.agents.coordinator import AgentCoordinator
 from src.llm.ensemble import LLMEnsemble
+from src.llm.brier_tracker import BrierTracker
 from src.risk.manager import RiskManager
 from src.execution.engine import ExecutionEngine, PositionAlreadyOpen
 from src.execution.paper import PaperExecutor
@@ -122,6 +123,12 @@ class NexusAlpha:
         self.swarm_voter: Optional[SwarmVoter] = None
         self.auto_calibrator: Optional[AutoCalibrator] = None
         self.regime_adapter: Optional[RegimeAdapter] = None
+        self.brier_tracker: Optional[BrierTracker] = None
+
+        # Outcome scan watermark: ISO timestamp of last closed-trade Brier outcome check
+        self._brier_outcome_watermark: Optional[str] = None
+        # Brier scan runs every 5 minutes (every 10 × 30-second metrics ticks)
+        self._brier_outcome_tick: int = 0
 
         # Per-market dynamic edge threshold (starts at 0.30, calibrated over time)
         self._edge_threshold: Dict[str, float] = {}
@@ -332,6 +339,12 @@ class NexusAlpha:
         self.auto_calibrator = AutoCalibrator()
         self.regime_adapter = RegimeAdapter()
         logger.info("AutoCalibrator + RegimeAdapter initialised")
+
+        # BrierTracker: per-model calibration scoring (in-memory; supabase client
+        # uses async execute() which is incompatible with BrierTracker's sync API —
+        # in-memory mode still gives accurate within-session Brier scores)
+        self.brier_tracker = BrierTracker(supabase_client=None)
+        logger.info("BrierTracker initialised (in-memory mode)")
 
         await self.dream_scheduler.init()
         await self.memory_updater.init()
@@ -711,6 +724,22 @@ class NexusAlpha:
                 except Exception as mem_exc:
                     logger.debug("MemoryUpdater: feed failed (non-fatal): %s", mem_exc)
 
+            # Step 7.6: Record Brier prediction (direction + confidence at trade entry)
+            if self.brier_tracker:
+                try:
+                    _pred_dir = str(
+                        getattr(candidate.direction, "value", candidate.direction)
+                    ).upper()
+                    self.brier_tracker.record_prediction(
+                        model="strategy_ensemble",
+                        market=market,
+                        symbol=symbol,
+                        direction=_pred_dir,
+                        confidence=float(candidate.confidence),
+                    )
+                except Exception as brier_exc:
+                    logger.debug("BrierTracker: prediction record failed (non-fatal): %s", brier_exc)
+
         except asyncio.CancelledError:
             raise
         except PositionAlreadyOpen as exc:
@@ -903,6 +932,49 @@ class NexusAlpha:
                             METRICS.active_strategies.set(_n_strats)
                         except Exception:
                             pass
+
+                        # Brier outcome scan (every 10 ticks ≈ 5 minutes)
+                        self._brier_outcome_tick = getattr(self, "_brier_outcome_tick", 0) + 1
+                        if self._brier_outcome_tick >= 10 and self.brier_tracker and self.db:
+                            self._brier_outcome_tick = 0
+                            try:
+                                _wm = getattr(self, "_brier_outcome_watermark", None)
+                                _q = (
+                                    self.db.client.table("trades")
+                                    .select("symbol, market, direction, pnl, closed_at")
+                                    .eq("status", "CLOSED")
+                                    .eq("execution_mode", "paper")
+                                    .not_.is_("pnl", "null")
+                                )
+                                if _wm:
+                                    _q = _q.gt("closed_at", _wm)
+                                _q = _q.order("closed_at").limit(50)
+                                _closed = await _q.execute()
+                                for _row in (_closed.data or []):
+                                    try:
+                                        _dir = str(_row.get("direction", "LONG")).upper()
+                                        _pnl = float(_row.get("pnl") or 0)
+                                        # Actual market direction inferred from P&L
+                                        _actual = _dir if _pnl > 0 else (
+                                            "SHORT" if _dir == "LONG" else "LONG"
+                                        )
+                                        self.brier_tracker.record_outcome(
+                                            model="strategy_ensemble",
+                                            market=str(_row.get("market", "crypto")),
+                                            symbol=str(_row.get("symbol", "")),
+                                            actual_direction=_actual,
+                                        )
+                                        # Advance watermark
+                                        _ts = _row.get("closed_at")
+                                        if _ts and (not _wm or _ts > _wm):
+                                            self._brier_outcome_watermark = _ts
+                                    except Exception:
+                                        pass
+                            except Exception as _brier_scan_exc:
+                                logger.debug(
+                                    "BrierTracker: outcome scan failed (non-fatal): %s",
+                                    _brier_scan_exc,
+                                )
 
                         # Telegram drawdown alert at 5% threshold
                         _last_dd = getattr(self, "_last_dd_alert_pct", 0.0)
