@@ -438,13 +438,16 @@ export function useRealtimeData(): void {
     // ------------------------------------------------------------------ 3.
     const checkHealth = async () => {
       try {
-        const res = await fetch('http://187.77.140.75:8080/health', {
-          signal: AbortSignal.timeout(5000),
+        // Use the server-side proxy to avoid mixed-content (HTTPS → HTTP) issues.
+        const res = await fetch('/api/bot/health', {
+          signal: AbortSignal.timeout(8000),
           cache: 'no-store',
         });
         if (res.ok) {
           const data = await res.json();
-          useNexusStore.getState().updateSystemStatus(data);
+          if (data.reachable !== false) {
+            useNexusStore.getState().updateSystemStatus(data);
+          }
         }
       } catch {
         // Bot unreachable — leave last known system status in place; do not
