@@ -322,7 +322,6 @@ class PaperExecutor(PaperTrader):
                 update_payload = {
                     "status":      "CLOSED",
                     "exit_price":  round(fill_price, 8),
-                    "exit_time":   now_iso,
                     "closed_at":   now_iso,
                     "pnl":         net_pnl,
                     "pnl_pct":     pnl_pct,

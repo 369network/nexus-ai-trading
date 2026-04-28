@@ -51,6 +51,9 @@ from src.alerts.manager import AlertManager
 from src.db.supabase_client import SupabaseClient
 from src.learning.dream_mode import DreamModeScheduler
 from src.learning.memory import MemoryUpdater
+from src.learning.swarm_voter import SwarmVoter
+from src.learning.auto_calibrator import AutoCalibrator
+from src.learning.regime_adapter import RegimeAdapter
 from src.monitoring.prometheus_metrics import METRICS
 
 
@@ -116,6 +119,14 @@ class NexusAlpha:
         self.execution_engine: Optional[ExecutionEngine] = None
         self.dream_scheduler: Optional[DreamModeScheduler] = None
         self.memory_updater: Optional[MemoryUpdater] = None
+        self.swarm_voter: Optional[SwarmVoter] = None
+        self.auto_calibrator: Optional[AutoCalibrator] = None
+        self.regime_adapter: Optional[RegimeAdapter] = None
+
+        # Per-market dynamic edge threshold (starts at 0.30, calibrated over time)
+        self._edge_threshold: Dict[str, float] = {}
+        # Track current detected regime per market key
+        self._current_regime: Dict[str, str] = {}
 
         # One MarketOrchestrator per enabled market
         self.market_orchestrators: Dict[str, MarketOrchestrator] = {}
@@ -304,6 +315,24 @@ class NexusAlpha:
             db=self.db,
         )
         self.memory_updater = MemoryUpdater(settings=self.settings, db=self.db)
+        self.swarm_voter = SwarmVoter(
+            model_dir="./models/swarm",
+            market="crypto",
+        )
+        # Attempt to load pre-trained models (may not exist on first run)
+        try:
+            self.swarm_voter.load_models()
+            logger.info(
+                "SwarmVoter: loaded pre-trained ensemble (%d models)",
+                len(self.swarm_voter._models),
+            )
+        except Exception as sv_exc:
+            logger.info("SwarmVoter: no pre-trained models found (%s) — will train on first batch", sv_exc)
+
+        self.auto_calibrator = AutoCalibrator()
+        self.regime_adapter = RegimeAdapter()
+        logger.info("AutoCalibrator + RegimeAdapter initialised")
+
         await self.dream_scheduler.init()
         await self.memory_updater.init()
         logger.info("Learning system ready.")
@@ -362,6 +391,7 @@ class NexusAlpha:
         background_coros.append(
             self._supervised_task("memory_updater", self.memory_updater.run)
         )
+        background_coros.append(self._calibration_loop())
 
         # Health check loop
         background_coros.append(self._health_check_loop())
@@ -523,11 +553,76 @@ class NexusAlpha:
                 candidate.direction, candidate.confidence, candidate.risk_reward,
             )
 
+            # Step 3.5: SwarmVoter confidence adjustment
+            # The 100-model ensemble either agrees with or contradicts the signal.
+            # When trained, it can veto weak signals (conf<0.35) or boost strong ones.
+            if self.swarm_voter and self.swarm_voter._is_trained:
+                try:
+                    import numpy as np
+                    # Build feature vector from indicators (best-effort, 0.0 for missing)
+                    _ind = indicators if isinstance(indicators, dict) else {}
+                    _feat = np.array([
+                        float(_ind.get("rsi", 50.0) or 50.0),
+                        float(_ind.get("rsi_slope", 0.0) or 0.0),
+                        float(_ind.get("macd_hist", 0.0) or 0.0),
+                        float(_ind.get("macd_signal", 0.0) or 0.0),
+                        float(_ind.get("bb_pct", 0.5) or 0.5),
+                        float(_ind.get("bb_width", 0.0) or 0.0),
+                        float(_ind.get("atr_pct", 0.0) or 0.0),
+                        float(_ind.get("volume_ratio", 1.0) or 1.0),
+                        float(_ind.get("sma20_slope", 0.0) or 0.0),
+                        float(_ind.get("sma50_slope", 0.0) or 0.0),
+                        float(_ind.get("close_vs_sma20", 0.0) or 0.0),
+                        float(_ind.get("close_vs_sma50", 0.0) or 0.0),
+                        float(_ind.get("high_low_range", 0.0) or 0.0),
+                        float(_ind.get("body_pct", 0.0) or 0.0),
+                        float(_ind.get("upper_shadow", 0.0) or 0.0),
+                        float(_ind.get("lower_shadow", 0.0) or 0.0),
+                        float(_ind.get("fear_greed", 50.0) or 50.0),
+                        float(_ind.get("funding_rate", 0.0) or 0.0),
+                        float(_ind.get("open_interest_change", 0.0) or 0.0),
+                    ], dtype=np.float32)
+                    _swarm_dir, _swarm_signal, _swarm_agree = (
+                        self.swarm_voter.predict_with_confidence(_feat)
+                    )
+                    _sig_dir = str(getattr(candidate.direction, "value", candidate.direction)).upper()
+                    # Agreement: swarm aligns with strategy → boost; opposes → reduce
+                    _aligned = (
+                        (_sig_dir in ("LONG", "BUY") and _swarm_dir == "LONG")
+                        or (_sig_dir in ("SHORT", "SELL") and _swarm_dir == "SHORT")
+                    )
+                    _blend_weight = 0.25  # Swarm contributes 25% to final confidence
+                    if _aligned:
+                        _new_conf = (
+                            candidate.confidence * (1 - _blend_weight)
+                            + _swarm_agree * _blend_weight
+                        )
+                    else:
+                        # Disagreement: reduce confidence by swarm's agreement on opposite
+                        _new_conf = candidate.confidence * (1 - _swarm_agree * _blend_weight)
+                    _new_conf = float(min(max(_new_conf, 0.0), 1.0))
+                    logger.debug(
+                        "SwarmVoter: %s %s — swarm=%s(%.2f) original_conf=%.3f → blended=%.3f",
+                        symbol, _sig_dir, _swarm_dir, _swarm_agree,
+                        candidate.confidence, _new_conf,
+                    )
+                    # Apply blended confidence back to candidate
+                    try:
+                        object.__setattr__(candidate, "confidence", _new_conf)
+                    except (TypeError, AttributeError):
+                        try:
+                            candidate.confidence = _new_conf
+                        except Exception:
+                            pass
+                except Exception as sv_exc:
+                    logger.debug("SwarmVoter step failed (non-fatal): %s", sv_exc)
+
             # Step 4: Inline edge gate (replaces full fusion/edge pipeline for paper mode)
             # Full debate → fusion → EdgeFilter will be wired when those interfaces align.
             # NOTE: min_rr is 1.45 (not 1.5) to tolerate floating-point rounding when
             # a strategy targets exactly 1.5 R:R (atr arithmetic can yield 1.49999...).
-            min_conf = 0.30
+            # min_conf is dynamic: starts at 0.30, updated by AutoCalibrator per market.
+            min_conf = self._edge_threshold.get(market, 0.30)
             min_rr   = 1.45
             if candidate.confidence < min_conf:
                 logger.debug(
@@ -550,6 +645,27 @@ class NexusAlpha:
                     key, risk_result.rejection_reason,
                 )
                 return
+
+            # Step 5.3: Regime-based risk adjustment
+            # RegimeAdapter applies size_multiplier based on current market regime.
+            # trending_down → 0.8×size; high_volatility → 0.5×size; ranging → 0.9×size
+            if self.regime_adapter:
+                try:
+                    _regime_str = str(
+                        getattr(regime, "value", regime) or "ranging"
+                    ).lower().replace(" ", "_")
+                    _risk_adj = self.regime_adapter.get_risk_adjustments(_regime_str)
+                    _size_mult = float(_risk_adj.get("size_multiplier", 1.0))
+                    if _size_mult != 1.0:
+                        risk_result.position_size = max(
+                            risk_result.position_size * _size_mult, 0.001
+                        )
+                        logger.debug(
+                            "RegimeAdapter [%s]: size × %.2f → position_size=%.4f",
+                            _regime_str, _size_mult, risk_result.position_size,
+                        )
+                except Exception as ra_exc:
+                    logger.debug("RegimeAdapter step failed (non-fatal): %s", ra_exc)
 
             # Step 5.5: Persist signal + agent decisions to Supabase (non-blocking)
             asyncio.ensure_future(self._persist_signal_to_db(candidate))
@@ -587,6 +703,13 @@ class NexusAlpha:
                     )
                 except Exception as alert_exc:
                     logger.debug("Alert failed (non-fatal): %s", alert_exc)
+
+            # Step 7.5: Feed completed trade into memory system
+            if self.memory_updater:
+                try:
+                    await self.memory_updater.update_from_trade(trade_result)
+                except Exception as mem_exc:
+                    logger.debug("MemoryUpdater: feed failed (non-fatal): %s", mem_exc)
 
         except asyncio.CancelledError:
             raise
@@ -818,6 +941,71 @@ class NexusAlpha:
         except Exception:
             pass
         await self.stop()
+
+    # ------------------------------------------------------------------
+    # Auto-Calibration Loop
+    # ------------------------------------------------------------------
+
+    async def _calibration_loop(self) -> None:
+        """
+        Hourly auto-calibration loop.
+
+        Every hour:
+          1. Fetches recent closed trades from the portfolio history
+          2. Calls AutoCalibrator to adjust edge thresholds per market
+          3. Stores updated thresholds in self._edge_threshold
+
+        This prevents the edge gate from becoming stale — if the win rate
+        drops below 40%, the threshold rises; if above 65%, it relaxes.
+        """
+        CALIBRATION_INTERVAL = 3600  # seconds
+        logger.info("AutoCalibrator loop started (runs hourly)")
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.sleep(CALIBRATION_INTERVAL)
+                if self.auto_calibrator is None:
+                    continue
+
+                # Gather recent trade history from paper executor
+                recent_trades: list = []
+                try:
+                    executor = getattr(self.execution_engine, "_executor", None)
+                    portfolio = getattr(executor, "_portfolio", None)
+                    if portfolio is not None:
+                        history = getattr(portfolio, "trade_history", [])
+                        # Use last 50 trades for calibration window
+                        recent_trades = [
+                            {"pnl": getattr(t, "pnl", 0.0), "symbol": getattr(t, "symbol", "")}
+                            for t in list(history)[-50:]
+                        ]
+                except Exception as hist_exc:
+                    logger.debug("Calibrator: could not read trade history: %s", hist_exc)
+
+                if not recent_trades:
+                    logger.debug("Calibrator: no trade history yet — skipping")
+                    continue
+
+                # Calibrate per active market
+                for market_name in list(self.market_orchestrators.keys()):
+                    current_thresh = self._edge_threshold.get(market_name, 0.30)
+                    new_thresh = self.auto_calibrator.calibrate_edge_thresholds(
+                        market=market_name,
+                        recent_trades=recent_trades,
+                        current_threshold=current_thresh,
+                        strategy_name="all",
+                    )
+                    if abs(new_thresh - current_thresh) > 0.001:
+                        logger.info(
+                            "AutoCalibrator [%s]: edge threshold %.3f → %.3f",
+                            market_name, current_thresh, new_thresh,
+                        )
+                        self._edge_threshold[market_name] = new_thresh
+
+            except asyncio.CancelledError:
+                logger.info("Calibration loop cancelled")
+                return
+            except Exception as exc:
+                logger.warning("Calibration loop error (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Health Check Loop
