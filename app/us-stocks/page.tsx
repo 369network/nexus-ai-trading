@@ -10,12 +10,52 @@ import { getRecentSignals, getActiveTrades } from '@/lib/supabase';
 import { cn, formatCurrency, formatPercent, formatNumber } from '@/lib/utils';
 import type { Signal, Trade } from '@/lib/types';
 
-const US_INDICES = [
-  { symbol: 'SPX', label: 'S&P 500', price: 5842.47, change: 18.32, changePct: 0.31 },
-  { symbol: 'NDX', label: 'NASDAQ 100', price: 20241.55, change: -42.18, changePct: -0.21 },
-  { symbol: 'DJI', label: 'Dow Jones', price: 43478.22, change: 125.75, changePct: 0.29 },
-  { symbol: 'RUT', label: 'Russell 2000', price: 2248.88, change: -8.42, changePct: -0.37 },
-];
+type IndexItem = {
+  symbol: string;
+  label: string;
+  price: number;
+  change: number;
+  changePct: number;
+};
+
+function useUSIndices() {
+  const [indices, setIndices] = useState<IndexItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const LABELS: Record<string, { label: string; symbol: string }> = {
+    spx: { label: 'S&P 500', symbol: 'SPX' },
+    ndx: { label: 'NASDAQ 100', symbol: 'NDX' },
+    dji: { label: 'Dow Jones', symbol: 'DJI' },
+    rut: { label: 'Russell 2000', symbol: 'RUT' },
+  };
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/prices/indices');
+        const data = await res.json();
+        const mapped = Object.entries(data.indices)
+          .filter(([, v]) => v !== null)
+          .map(([key, v]: [string, any]) => ({
+            symbol: LABELS[key].symbol,
+            label: LABELS[key].label,
+            price: v.price,
+            change: v.change,
+            changePct: v.changePct,
+          }));
+        setIndices(mapped);
+        setLoading(false);
+      } catch {
+        setLoading(false);
+      }
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  return { indices, loading };
+}
 
 // Sector data
 const SECTORS = [
@@ -235,6 +275,7 @@ export default function USStocksPage() {
   const { signalFeed, activeTrades } = useNexusStore();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const { indices: US_INDICES, loading: indicesLoading } = useUSIndices();
 
   useEffect(() => {
     const load = async () => {
@@ -252,11 +293,29 @@ export default function USStocksPage() {
 
   return (
     <div className="space-y-4">
+      {/* Attribution */}
+      <div className="flex items-center justify-end px-1">
+        <span className="text-xs text-muted">
+          {indicesLoading ? (
+            'Loading live data...'
+          ) : (
+            <>
+              <span className="inline-block w-2 h-2 rounded-full bg-nexus-green mr-1 animate-pulse" />
+              Live · Yahoo Finance
+            </>
+          )}
+        </span>
+      </div>
+
       {/* Index cards */}
       <div className="grid grid-cols-4 gap-4">
-        {US_INDICES.map((index) => (
-          <IndexCard key={index.symbol} index={index} />
-        ))}
+        {indicesLoading
+          ? Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="nexus-card p-4 h-24 animate-pulse bg-white/5" />
+            ))
+          : US_INDICES.map((index) => (
+              <IndexCard key={index.symbol} index={index} />
+            ))}
       </div>
 
       {/* Sector heatmap + earnings */}

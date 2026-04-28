@@ -15,6 +15,7 @@ import {
   Bot,
   Shield,
   BarChart3,
+  BookOpen,
   Settings,
   Wifi,
   WifiOff,
@@ -34,6 +35,7 @@ import {
   getLatestPortfolioSnapshot,
 } from '@/lib/supabase';
 import { cn, formatCurrency, formatPercent, getPnlColor } from '@/lib/utils';
+import { LivePriceTicker } from '@/components/LivePriceTicker';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -49,6 +51,7 @@ const NAV_ITEMS = [
   { href: '/agents', label: 'Agent Network', icon: Bot },
   { href: '/risk', label: 'Risk Monitor', icon: Shield },
   { href: '/performance', label: 'Performance', icon: BarChart3 },
+  { href: '/journal', label: 'Trade Journal', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 
@@ -240,7 +243,7 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
               <div className="text-center">
                 <div className="text-xs text-muted">Equity</div>
                 <div className="font-mono text-sm font-semibold text-white">
-                  {formatCurrency(portfolioState.equity || 127840)}
+                  {portfolioState.equity > 0 ? formatCurrency(portfolioState.equity) : '—'}
                 </div>
               </div>
               <div className="w-px h-8 bg-border" />
@@ -252,10 +255,12 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
                     getPnlColor(portfolioState.dailyPnl)
                   )}
                 >
-                  {formatCurrency(portfolioState.dailyPnl || 1240)}{' '}
+                  {portfolioState.equity > 0 ? formatCurrency(portfolioState.dailyPnl) : '—'}{' '}
+                  {portfolioState.equity > 0 && (
                   <span className="text-xs">
-                    ({formatPercent(portfolioState.dailyPnlPct || 0.97)})
+                    ({formatPercent(portfolioState.dailyPnlPct)})
                   </span>
+                  )}
                 </div>
               </div>
               <div className="w-px h-8 bg-border" />
@@ -267,14 +272,14 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
                     portfolioState.drawdown < -10 ? 'text-nexus-red' : 'text-nexus-yellow'
                   )}
                 >
-                  {formatPercent(portfolioState.drawdown || -3.2)}
+                  {portfolioState.equity > 0 ? formatPercent(portfolioState.drawdown) : '—'}
                 </div>
               </div>
               <div className="w-px h-8 bg-border" />
               <div className="text-center">
                 <div className="text-xs text-muted">Positions</div>
                 <div className="font-mono text-sm font-semibold text-nexus-blue">
-                  {portfolioState.openPositions || 4}
+                  {portfolioState.openPositions}
                 </div>
               </div>
             </div>
@@ -300,6 +305,11 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
+
+        {/* Live price ticker */}
+        <div className="flex-shrink-0 border-b border-border/50">
+          <LivePriceTicker />
+        </div>
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto bg-background">

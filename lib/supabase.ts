@@ -711,3 +711,60 @@ function getMockEquityCurve(days: number): { time: string; value: number }[] {
 
   return points;
 }
+
+// ============================================================
+// DAILY P&L HISTORY — for PnLCalendar heatmap
+// ============================================================
+
+export interface DayData {
+  date: string;    // YYYY-MM-DD
+  pnl: number;     // dollar PnL for the day
+  pnlPct: number;  // percentage PnL
+  trades: number;  // number of trades closed that day
+}
+
+export async function getDailyPnLHistory(days: number = 365): Promise<DayData[]> {
+  // Get portfolio snapshots grouped by day
+  // We take one snapshot per day (the last one) to compute daily PnL
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data, error } = await supabase
+    .from('portfolio_snapshots')
+    .select('equity, daily_pnl, created_at')
+    .gte('created_at', since)
+    .order('created_at', { ascending: true });
+
+  if (error || !data || data.length === 0) return [];
+
+  // Group by date, take last snapshot of each day
+  const byDate: Record<string, { equity: number; daily_pnl: number; count: number }> = {};
+  for (const row of data) {
+    const date = row.created_at.slice(0, 10);
+    byDate[date] = {
+      equity: row.equity,
+      daily_pnl: row.daily_pnl ?? 0,
+      count: (byDate[date]?.count ?? 0) + 1,
+    };
+  }
+
+  // Get trade counts per day
+  const { data: trades } = await supabase
+    .from('trades')
+    .select('closed_at')
+    .gte('closed_at', since)
+    .not('closed_at', 'is', null);
+
+  const tradesByDate: Record<string, number> = {};
+  for (const t of trades ?? []) {
+    if (t.closed_at) {
+      const d = t.closed_at.slice(0, 10);
+      tradesByDate[d] = (tradesByDate[d] ?? 0) + 1;
+    }
+  }
+
+  return Object.entries(byDate).map(([date, v]) => ({
+    date,
+    pnl: v.daily_pnl,
+    pnlPct: v.equity > 0 ? (v.daily_pnl / (v.equity - v.daily_pnl)) * 100 : 0,
+    trades: tradesByDate[date] ?? 0,
+  }));
+}

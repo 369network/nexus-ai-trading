@@ -16,16 +16,68 @@ const FOREX_SESSIONS: ForexSession[] = [
   { name: 'New York', open_utc: '13:00', close_utc: '22:00', active: true, pairs: ['EURUSD', 'GBPUSD', 'USDCAD'] },
 ];
 
-const MAJOR_PAIRS = [
-  { symbol: 'EURUSD', price: 1.08420, change: -0.12, spread: 0.2, pip: 1.08400 },
-  { symbol: 'GBPUSD', price: 1.27180, change: 0.23, spread: 0.3, pip: 1.27150 },
-  { symbol: 'USDJPY', price: 149.840, change: 0.45, spread: 0.5, pip: 149.870 },
-  { symbol: 'USDCHF', price: 0.89920, change: -0.08, spread: 0.4, pip: 0.89900 },
-  { symbol: 'AUDUSD', price: 0.64820, change: 0.18, spread: 0.3, pip: 0.64810 },
-  { symbol: 'USDCAD', price: 1.36720, change: -0.22, spread: 0.4, pip: 1.36700 },
-  { symbol: 'NZDUSD', price: 0.59640, change: 0.31, spread: 0.5, pip: 0.59630 },
-  { symbol: 'EURGBP', price: 0.85240, change: -0.15, spread: 0.4, pip: 0.85230 },
-];
+type ForexPair = {
+  symbol: string;
+  price: number;
+  change: number;
+  spread: number;
+  pip: number;
+};
+
+function useForexPrices() {
+  const [pairs, setPairs] = useState<ForexPair[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const DEFAULT_PAIRS = [
+      { symbol: 'EURUSD', base: 'USD', quote: 'EUR', invert: true },
+      { symbol: 'GBPUSD', base: 'USD', quote: 'GBP', invert: true },
+      { symbol: 'USDJPY', base: 'USD', quote: 'JPY', invert: false },
+      { symbol: 'USDCHF', base: 'USD', quote: 'CHF', invert: false },
+      { symbol: 'AUDUSD', base: 'USD', quote: 'AUD', invert: true },
+      { symbol: 'USDCAD', base: 'USD', quote: 'CAD', invert: false },
+      { symbol: 'NZDUSD', base: 'USD', quote: 'NZD', invert: true },
+    ];
+
+    const fetchRates = async () => {
+      try {
+        // Current rates
+        const res = await fetch('https://api.frankfurter.app/latest?base=USD&symbols=EUR,GBP,JPY,CHF,AUD,CAD,NZD');
+        const data = await res.json();
+
+        // Yesterday rates for 24h change
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        const resY = await fetch(`https://api.frankfurter.app/${yesterday}?base=USD&symbols=EUR,GBP,JPY,CHF,AUD,CAD,NZD`);
+        const dataY = await resY.json();
+
+        const mapped = DEFAULT_PAIRS.map((p) => {
+          const rate = data.rates[p.quote];
+          const rateY = dataY.rates?.[p.quote] ?? rate;
+          const price = p.invert ? 1 / rate : rate;
+          const priceY = p.invert ? 1 / rateY : rateY;
+          const change = ((price - priceY) / priceY) * 100;
+          return {
+            symbol: p.symbol,
+            price: parseFloat(price.toFixed(p.symbol === 'USDJPY' ? 3 : 5)),
+            change: parseFloat(change.toFixed(3)),
+            spread: p.symbol.includes('JPY') ? 0.8 : 0.2,
+            pip: parseFloat((price - 0.0001).toFixed(5)),
+          };
+        });
+        setPairs(mapped);
+        setLoading(false);
+      } catch {
+        setLoading(false);
+      }
+    };
+
+    fetchRates();
+    const interval = setInterval(fetchRates, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return { pairs, loading };
+}
 
 const ECONOMIC_EVENTS: EconomicEvent[] = [
   { id: '1', datetime: new Date(Date.now() + 3600000).toISOString(), currency: 'USD', title: 'Non-Farm Payrolls', impact: 'HIGH', forecast: '185K', previous: '206K' },
@@ -228,6 +280,7 @@ export default function ForexPage() {
   const { signalFeed, marketPrices } = useNexusStore();
   const [activePair, setActivePair] = useState('EURUSD');
   const [signals, setSignals] = useState<Signal[]>([]);
+  const { pairs: MAJOR_PAIRS, loading } = useForexPrices();
 
   useEffect(() => {
     getRecentSignals('forex', 20).then(setSignals);
@@ -237,6 +290,12 @@ export default function ForexPage() {
 
   return (
     <div className="space-y-4">
+      {/* Header with attribution */}
+      <div className="flex items-center justify-between px-1">
+        <span />
+        <span className="text-xs text-muted">Rates via Frankfurter.app</span>
+      </div>
+
       {/* Session clocks */}
       <SessionClock sessions={FOREX_SESSIONS} />
 
@@ -245,6 +304,13 @@ export default function ForexPage() {
         {/* Pair selector */}
         <div className="nexus-card p-4">
           <h3 className="font-medium text-sm text-white mb-3">Select Pair</h3>
+          {loading && (
+            <div className="space-y-1">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="h-9 rounded-lg bg-white/5 animate-pulse" />
+              ))}
+            </div>
+          )}
           <div className="space-y-1">
             {MAJOR_PAIRS.map((pair) => (
               <button
@@ -286,7 +352,16 @@ export default function ForexPage() {
 
       {/* Bottom panels */}
       <div className="grid grid-cols-3 gap-4">
-        <MajorPairsTable pairs={MAJOR_PAIRS} />
+        {loading ? (
+          <div className="nexus-card p-4">
+            <div className="h-4 w-24 bg-white/10 rounded animate-pulse mb-4" />
+            {Array.from({ length: 7 }).map((_, i) => (
+              <div key={i} className="h-8 rounded bg-white/5 animate-pulse mb-2" />
+            ))}
+          </div>
+        ) : (
+          <MajorPairsTable pairs={MAJOR_PAIRS} />
+        )}
         <EconomicCalendar events={ECONOMIC_EVENTS} />
         <SignalFeed market="forex" limit={8} />
       </div>
