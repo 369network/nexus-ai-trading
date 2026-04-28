@@ -51,6 +51,7 @@ from src.alerts.manager import AlertManager
 from src.db.supabase_client import SupabaseClient
 from src.learning.dream_mode import DreamModeScheduler
 from src.learning.memory import MemoryUpdater
+from src.monitoring.prometheus_metrics import METRICS
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +198,14 @@ class NexusAlpha:
 
         # Step 0: Start health/metrics HTTP server (must be first for Docker health checks)
         logger.info("[0/14] Starting health/metrics server on :8080…")
-        from src.monitoring.health_server import HealthServer, update_bot_status
+        from src.monitoring.health_server import (
+            HealthServer,
+            update_bot_status,
+            register_emergency_stop_callback,
+        )
         self._health_server = HealthServer(port=8080)
         self._health_server.start()
+        register_emergency_stop_callback(self._handle_emergency_stop)
 
         # Step 1: Load configuration
         logger.info("[1/14] Loading configuration…")
@@ -363,6 +369,9 @@ class NexusAlpha:
         # Watchdog loop
         background_coros.append(self._watchdog_loop())
 
+        # Prometheus gauge update loop
+        background_coros.append(self._metrics_loop())
+
         # Alert manager loop
         background_coros.append(
             self._supervised_task("alert_manager", self.alert_manager.run)
@@ -502,6 +511,12 @@ class NexusAlpha:
             if candidate is None:
                 return  # No actionable signal from any strategy
 
+            # Metric: count every candidate signal that passes the strategy check
+            try:
+                METRICS.signals_generated_total.labels(market=market).inc()
+            except Exception:
+                pass
+
             logger.info(
                 "🎯 Candidate signal: %s %s %s dir=%s conf=%.2f RR=%.2f",
                 market, symbol, timeframe,
@@ -550,6 +565,18 @@ class NexusAlpha:
                 trade_result.quantity, trade_result.entry_price,
                 trade_result.stop_loss, trade_result.take_profit,
             )
+
+            # Metric: count executed trades
+            try:
+                raw_dir = str(getattr(candidate.direction, "value", candidate.direction)).lower()
+                strategy_name = str(getattr(candidate, "strategy_name", "unknown") or "unknown")
+                METRICS.trades_total.labels(
+                    market=market,
+                    side=raw_dir,
+                    strategy=strategy_name,
+                ).inc()
+            except Exception:
+                pass
 
             # Step 7: Alert
             if self.alert_manager:
@@ -704,6 +731,68 @@ class NexusAlpha:
                 )
         except Exception as exc:
             logger.error("Failed to store signal: %s", exc, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Prometheus Metrics Update Loop
+    # ------------------------------------------------------------------
+
+    async def _metrics_loop(self) -> None:
+        """Update Prometheus gauges from portfolio state every 30 seconds."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=30,
+                )
+                break  # Shutdown requested
+            except asyncio.TimeoutError:
+                pass  # Normal: update gauges now
+
+            try:
+                if self.execution_engine is not None:
+                    state = await self.execution_engine.get_portfolio_state()
+                    if state is not None:
+                        equity = float(getattr(state, "equity", None) or getattr(state, "portfolio_value", 0) or 0)
+                        daily_pnl = float(getattr(state, "daily_pnl", 0) or 0)
+                        num_open = int(getattr(state, "open_positions", 0) or 0)
+                        drawdown_pct = float(getattr(state, "drawdown_pct", 0) or getattr(state, "current_drawdown_pct", 0) or 0)
+
+                        METRICS.portfolio_value.set(equity)
+                        METRICS.daily_pnl.set(daily_pnl)
+                        METRICS.open_positions.set(num_open)
+                        METRICS.current_drawdown_pct.set(drawdown_pct)
+
+                        # Also push open positions list to health server
+                        try:
+                            raw_positions = getattr(state, "positions", None) or []
+                            from src.monitoring.health_server import update_positions
+                            positions_payload = []
+                            for p in raw_positions:
+                                if hasattr(p, "__dict__"):
+                                    positions_payload.append(p.__dict__)
+                                elif isinstance(p, dict):
+                                    positions_payload.append(p)
+                            update_positions(positions_payload)
+                        except Exception:
+                            pass
+            except AttributeError:
+                pass  # execution_engine may not have get_portfolio_state yet
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("Metrics update error (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Emergency Stop Handler
+    # ------------------------------------------------------------------
+
+    async def _handle_emergency_stop(self) -> None:
+        """Called by the health server emergency-stop endpoint."""
+        logger.critical(
+            "EMERGENCY STOP activated via /control/emergency-stop — halting bot immediately."
+        )
+        self._running = False  # noqa: used by any future polling guard
+        await self.stop()
 
     # ------------------------------------------------------------------
     # Health Check Loop

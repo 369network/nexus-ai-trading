@@ -58,14 +58,14 @@ class Settings:
     telegram_chat_id: str
     discord_webhook_url: str
 
-    # Paper trading capital
-    initial_capital: float = 5_000.0
-
     # Markets
     enabled_markets: Dict[str, MarketConfig]
 
     # Cache
     redis_url: str
+
+    # Paper trading capital (must be last — has default, others above don't)
+    initial_capital: float = 5_000.0
 
 
 def _bool_env(key: str, default: bool) -> bool:
