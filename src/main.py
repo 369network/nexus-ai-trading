@@ -384,6 +384,11 @@ class NexusAlpha:
                 if engine is None:
                     continue
                 for timeframe in market_cfg.timeframes:
+                    # NOTE: get_provider_for_market always returns a FRESH provider
+                    # (not a singleton) — safe to close after warmup.  CCXTProvider
+                    # creates new ccxt exchange instances each call; closing them
+                    # here prevents "Unclosed client session" asyncio warnings.
+                    provider = None
                     try:
                         provider = get_provider_for_market(
                             market=market_name,
@@ -422,6 +427,14 @@ class NexusAlpha:
                             "Warmup failed for %s/%s/%s: %s",
                             market_name, symbol, timeframe, exc,
                         )
+                    finally:
+                        # Always close the temporary provider to release ccxt
+                        # aiohttp sessions — resilient to close() failures.
+                        if provider is not None:
+                            try:
+                                await provider.close()
+                            except Exception:
+                                pass
 
     # ------------------------------------------------------------------
     # Signal Generation (called by MarketOrchestrator on candle close)
