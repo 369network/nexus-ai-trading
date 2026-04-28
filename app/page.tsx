@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   TrendingUp,
@@ -10,6 +10,14 @@ import {
   XCircle,
   Minus,
   RefreshCw,
+  Bot,
+  Wifi,
+  WifiOff,
+  Brain,
+  Zap,
+  BarChart3,
+  Target,
+  Layers,
 } from 'lucide-react';
 import {
   PieChart,
@@ -19,6 +27,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { useNexusStore } from '@/lib/store';
+import { useBotMetrics } from '@/hooks/useBotMetrics';
 import { getRecentSignals, getRecentTrades } from '@/lib/supabase';
 import { PnLCard } from '@/components/PnLCard';
 import { SignalFeed } from '@/components/SignalFeed';
@@ -149,6 +158,35 @@ function CircuitBreakerStatus({ name, triggered }: { name: string; triggered: bo
   );
 }
 
+function BotMetricCard({
+  icon: Icon,
+  label,
+  value,
+  subValue,
+  color = 'text-nexus-blue',
+  iconColor,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  subValue?: string;
+  color?: string;
+  iconColor?: string;
+}) {
+  return (
+    <div className="nexus-card p-3 flex items-center gap-3">
+      <div className={cn('p-2 rounded-lg bg-white/5', iconColor ?? color)}>
+        <Icon size={16} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-muted truncate">{label}</p>
+        <p className={cn('text-sm font-mono font-bold truncate', color)}>{value}</p>
+        {subValue && <p className="text-xs text-muted truncate">{subValue}</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function OverviewPage() {
   const {
     portfolioState,
@@ -157,6 +195,8 @@ export default function OverviewPage() {
     agentStates,
     systemStatus,
   } = useNexusStore();
+
+  const botMetrics = useBotMetrics();
 
   const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -209,6 +249,105 @@ export default function OverviewPage() {
             />
           ))}
         </div>
+      </div>
+
+      {/* Row 1.5: Bot live metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+        {/* Bot connectivity */}
+        <div
+          className={cn(
+            'nexus-card p-3 flex items-center gap-3',
+            botMetrics.reachable ? 'border-nexus-green/20' : 'border-nexus-red/20'
+          )}
+        >
+          <div
+            className={cn(
+              'p-2 rounded-lg',
+              botMetrics.reachable ? 'bg-nexus-green/10 text-nexus-green' : 'bg-nexus-red/10 text-nexus-red'
+            )}
+          >
+            {botMetrics.reachable ? <Wifi size={16} /> : <WifiOff size={16} />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-muted">Bot Status</p>
+            <p
+              className={cn(
+                'text-sm font-mono font-bold',
+                botMetrics.reachable ? 'text-nexus-green' : 'text-nexus-red'
+              )}
+            >
+              {botMetrics.reachable ? 'ONLINE' : 'OFFLINE'}
+            </p>
+            <p className="text-xs text-muted">
+              {formatTimeAgo(botMetrics.fetchedAt)}
+            </p>
+          </div>
+        </div>
+
+        {/* Win rate */}
+        <BotMetricCard
+          icon={Target}
+          label="Win Rate"
+          value={
+            botMetrics.win_rate !== null
+              ? `${(botMetrics.win_rate * 100).toFixed(1)}%`
+              : '—'
+          }
+          color={
+            botMetrics.win_rate === null
+              ? 'text-muted'
+              : botMetrics.win_rate >= 0.5
+              ? 'text-nexus-green'
+              : 'text-nexus-yellow'
+          }
+        />
+
+        {/* Daily P&L */}
+        <BotMetricCard
+          icon={botMetrics.daily_pnl !== null && botMetrics.daily_pnl >= 0 ? TrendingUp : TrendingDown}
+          label="Daily P&L"
+          value={
+            botMetrics.daily_pnl !== null
+              ? formatCurrency(botMetrics.daily_pnl)
+              : '—'
+          }
+          color={
+            botMetrics.daily_pnl === null
+              ? 'text-muted'
+              : botMetrics.daily_pnl >= 0
+              ? 'text-nexus-green'
+              : 'text-nexus-red'
+          }
+        />
+
+        {/* LLM calls today */}
+        <BotMetricCard
+          icon={Brain}
+          label="LLM Calls Today"
+          value={botMetrics.llm_calls_today !== null ? String(botMetrics.llm_calls_today) : '—'}
+          color="text-nexus-blue"
+        />
+
+        {/* Active strategies */}
+        <BotMetricCard
+          icon={Layers}
+          label="Active Strategies"
+          value={botMetrics.active_strategies !== null ? String(botMetrics.active_strategies) : '—'}
+          color="text-nexus-purple"
+        />
+
+        {/* Signals / Trades today */}
+        <BotMetricCard
+          icon={Zap}
+          label="Signals / Trades"
+          value={
+            botMetrics.signals_today !== null
+              ? `${botMetrics.signals_today} / ${botMetrics.trades_today ?? 0}`
+              : '— / —'
+          }
+          subValue="today"
+          color="text-nexus-yellow"
+        />
       </div>
 
       {/* Row 2: Signal feed + Agent consensus */}
