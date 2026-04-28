@@ -81,16 +81,19 @@ function useAnimatedValue(targetValue: number, duration: number = 300): number {
 }
 
 export function PnLCard() {
-  const { portfolioState } = useNexusStore();
+  const { portfolioState, lastUpdate } = useNexusStore();
 
-  const equity = portfolioState.equity || 127840;
-  const dailyPnl = portfolioState.dailyPnl || 1240;
-  const dailyPnlPct = portfolioState.dailyPnlPct || 0.97;
-  const drawdown = portfolioState.drawdown || -3.2;
-  const openPositions = portfolioState.openPositions || 4;
+  // Use ?? (nullish coalescing) not || so legitimate 0 values don't fall back to
+  // hardcoded mock numbers.  equity > 0 check: show loading state until real data arrives.
+  const hasData = portfolioState.equity > 0 || lastUpdate !== null;
+  const equity = portfolioState.equity ?? 0;
+  const dailyPnl = portfolioState.dailyPnl ?? 0;
+  const dailyPnlPct = portfolioState.dailyPnlPct ?? 0;
+  const drawdown = portfolioState.drawdown ?? 0;
+  const openPositions = portfolioState.openPositions ?? 0;
   const sparkData = portfolioState.equityCurve.length
     ? portfolioState.equityCurve.map((p) => p.value)
-    : Array.from({ length: 24 }, (_, i) => 120000 + Math.sin(i * 0.3) * 3000 + i * 200);
+    : [];
 
   const animatedEquity = useAnimatedValue(equity);
   const animatedDailyPnl = useAnimatedValue(dailyPnl);
@@ -125,9 +128,13 @@ export function PnLCard() {
       {/* Equity */}
       <div className="mb-4">
         <div className="text-xs text-muted mb-1">Total Equity</div>
-        <div className="font-mono text-3xl font-bold text-white tracking-tight">
-          {formatCurrency(animatedEquity, 'USD', false)}
-        </div>
+        {hasData ? (
+          <div className="font-mono text-3xl font-bold text-white tracking-tight">
+            {formatCurrency(animatedEquity, 'USD', false)}
+          </div>
+        ) : (
+          <div className="h-9 w-40 shimmer rounded animate-pulse" />
+        )}
       </div>
 
       {/* Daily P&L */}

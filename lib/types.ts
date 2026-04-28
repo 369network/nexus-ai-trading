@@ -5,7 +5,7 @@
 
 export type Market = 'crypto' | 'forex' | 'commodities' | 'indian_stocks' | 'us_stocks';
 export type Direction = 'LONG' | 'SHORT' | 'NEUTRAL';
-export type TradeStatus = 'OPEN' | 'CLOSED' | 'STOPPED_OUT' | 'TAKE_PROFIT' | 'CANCELLED';
+export type TradeStatus = 'OPEN' | 'CLOSED' | 'PARTIAL' | 'STOPPED_OUT' | 'TAKE_PROFIT' | 'CANCELLED';
 export type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type AgentRole = 'bull' | 'bear' | 'fundamental' | 'technical' | 'sentiment' | 'risk' | 'portfolio';
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
@@ -38,22 +38,36 @@ export interface AgentVotes {
 }
 
 // ---- Signal ----
+// Matches actual Supabase `signals` table schema.
+// Extra display fields (entry, stop_loss, tp1, agent_votes, reasoning, risk_reward)
+// are stored in raw_data JSONB and promoted to top-level by getRecentSignals().
 export interface Signal {
   id: string;
   symbol: string;
   market: Market;
-  direction: Direction;
-  strength: number;          // 0-100
+  direction: Direction;      // dashboard uses LONG/SHORT/NEUTRAL (mapped from BUY/SELL/NEUTRAL in DB)
+  strength: number;          // 0-100 (mapped from DB `score` column)
   confidence: number;        // 0-1
-  entry: number;
-  stop_loss: number;
-  tp1: number;
-  tp2: number;
-  tp3: number;
-  agent_votes: AgentVotes;
-  reasoning: string;
-  risk_reward: number;
-  position_size: number;     // fraction of portfolio
+  // DB columns
+  score?: number;            // raw DB column (= strength)
+  strategy?: string;
+  llm_weight?: number;
+  technical_weight?: number;
+  sentiment_weight?: number;
+  onchain_weight?: number;
+  expected_value?: number;
+  is_executed?: boolean;
+  raw_data?: Record<string, unknown>;
+  // Extra display fields (extracted from raw_data by query layer)
+  entry?: number;
+  stop_loss?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  agent_votes?: AgentVotes;
+  reasoning?: string;
+  risk_reward?: number;
+  position_size?: number;
   created_at: string;
   expires_at?: string;
   metadata?: Record<string, unknown>;
@@ -65,38 +79,60 @@ export interface Trade {
   symbol: string;
   market: Market;
   direction: Direction;
+  side?: Direction;          // DB alias for direction
   status: TradeStatus;
   entry_price: number;
   exit_price?: number;
   stop_loss: number;
-  take_profit: number;
-  size: number;              // position size in base currency
+  take_profit_1: number;    // DB column name (was take_profit)
+  take_profit_2?: number;
+  take_profit_3?: number;
+  quantity: number;          // DB column name (was size)
+  quantity_filled?: number;
+  position_value?: number;
   pnl?: number;              // realized P&L in USD
   pnl_pct?: number;          // realized P&L %
   unrealized_pnl?: number;
   unrealized_pnl_pct?: number;
   entry_time: string;
+  opened_at: string;         // DB column name for entry timestamp
+  closed_at?: string;
   exit_time?: string;
   duration_minutes?: number;
-  strategy: string;
+  strategy?: string;
   signal_id?: string;
   commission?: number;
+  fees_paid?: number;
   slippage?: number;
-  created_at: string;
-  updated_at: string;
+  slippage_pct?: number;
+  execution_mode?: string;
+  exchange?: string;
+  agent_confidence?: number;
+  meta?: Record<string, unknown>;
+  trade_metadata?: Record<string, unknown>;
+  client_order_id?: string;
+  exchange_order_id?: string;
 }
 
 // ---- Agent Decision ----
+// Matches actual Supabase `agent_decisions` table schema.
+// The `signal` column stores BUY/SELL/NEUTRAL; mapped to `decision` (LONG/SHORT/NEUTRAL) by query layer.
 export interface AgentDecision {
   id: string;
   role: AgentRole;
-  symbol: string;
-  market: Market;
-  decision: Direction;
+  // DB columns
+  signal?: string;           // raw DB column: BUY/SELL/NEUTRAL
+  debate_id?: string;
+  raw_output?: Record<string, unknown>;
+  latency_ms?: number;
+  // Display fields (mapped from DB or extracted from raw_output)
+  decision: Direction;       // mapped from signal: BUY→LONG, SELL→SHORT
   confidence: number;        // 0-1
   reasoning: string;
-  key_factors: string[];
-  data_sources: string[];
+  symbol?: string;           // extracted from raw_output
+  market?: Market;           // extracted from raw_output
+  key_factors?: string[];
+  data_sources?: string[];
   brier_score?: number;
   created_at: string;
 }
@@ -118,17 +154,26 @@ export interface RiskEvent {
 // ---- Portfolio Snapshot ----
 export interface PortfolioSnapshot {
   id: string;
-  timestamp: string;
+  // Actual DB columns
   equity: number;
   cash: number;
-  unrealized_pnl: number;
-  realized_pnl_today: number;
+  positions_value?: number;
+  daily_pnl?: number;
+  daily_pnl_pct?: number;
+  total_pnl?: number;
   drawdown_pct: number;
-  max_drawdown_pct: number;
   open_positions: number;
-  exposure_pct: number;
-  margin_used?: number;
+  win_rate?: number;
+  portfolio_heat?: number;
+  market_exposure?: Record<string, number>;
   created_at: string;
+  // Legacy aliases (kept for backward compat with store updatePortfolio)
+  timestamp?: string;
+  unrealized_pnl?: number;
+  realized_pnl_today?: number;
+  max_drawdown_pct?: number;
+  exposure_pct?: number;
+  margin_used?: number;
 }
 
 // ---- Performance Metrics ----

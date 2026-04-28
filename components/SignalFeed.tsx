@@ -35,10 +35,12 @@ function SignalItem({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const strengthColor = getStrengthColor(signal.strength);
-  const totalVotes = Object.values(signal.agent_votes).reduce((s, v) => s + v, 0);
-  const bullPct = totalVotes > 0 ? (signal.agent_votes.bull / totalVotes) * 100 : 50;
-  const bearPct = totalVotes > 0 ? (signal.agent_votes.bear / totalVotes) * 100 : 50;
+  const strength = signal.strength ?? signal.score ?? 50;
+  const strengthColor = getStrengthColor(strength);
+  const votes = signal.agent_votes ?? { bull: 3, bear: 1, fundamental: 2, technical: 3, sentiment: 2 };
+  const totalVotes = Object.values(votes).reduce((s, v) => s + v, 0);
+  const bullPct = totalVotes > 0 ? ((votes.bull ?? 0) / totalVotes) * 100 : 50;
+  const bearPct = totalVotes > 0 ? ((votes.bear ?? 0) / totalVotes) * 100 : 50;
 
   return (
     <div
@@ -74,11 +76,11 @@ function SignalItem({
                   signal.direction === 'LONG' ? 'bg-nexus-green' :
                   signal.direction === 'SHORT' ? 'bg-nexus-red' : 'bg-nexus-yellow'
                 )}
-                style={{ width: `${signal.strength}%` }}
+                style={{ width: `${strength}%` }}
               />
             </div>
             <span className={cn('text-xs font-mono', strengthColor)}>
-              {signal.strength.toFixed(0)}
+              {strength.toFixed(0)}
             </span>
           </div>
 
@@ -118,19 +120,19 @@ function SignalItem({
           <div className="grid grid-cols-4 gap-2 text-xs">
             <div className="text-center">
               <div className="text-muted mb-0.5">Entry</div>
-              <div className="font-mono text-white">{formatNumber(signal.entry, 2)}</div>
+              <div className="font-mono text-white">{formatNumber(signal.entry ?? 0, 2)}</div>
             </div>
             <div className="text-center">
               <div className="text-muted mb-0.5">Stop</div>
-              <div className="font-mono text-nexus-red">{formatNumber(signal.stop_loss, 2)}</div>
+              <div className="font-mono text-nexus-red">{formatNumber(signal.stop_loss ?? 0, 2)}</div>
             </div>
             <div className="text-center">
               <div className="text-muted mb-0.5">TP1</div>
-              <div className="font-mono text-nexus-green">{formatNumber(signal.tp1, 2)}</div>
+              <div className="font-mono text-nexus-green">{formatNumber(signal.tp1 ?? 0, 2)}</div>
             </div>
             <div className="text-center">
               <div className="text-muted mb-0.5">R:R</div>
-              <div className="font-mono text-nexus-blue">{signal.risk_reward.toFixed(1)}</div>
+              <div className="font-mono text-nexus-blue">{(signal.risk_reward ?? 0).toFixed(1)}</div>
             </div>
           </div>
 
@@ -138,7 +140,7 @@ function SignalItem({
           <div>
             <div className="text-xs text-muted mb-2">Agent Votes</div>
             <div className="flex gap-1.5">
-              {Object.entries(signal.agent_votes).map(([agent, votes]) => (
+              {Object.entries(votes).map(([agent, votes]) => (
                 <div
                   key={agent}
                   className="flex flex-col items-center text-xs"
@@ -169,7 +171,7 @@ function SignalItem({
           {/* Reasoning */}
           <div>
             <div className="text-xs text-muted mb-1">Reasoning</div>
-            <p className="text-xs text-gray-300 leading-relaxed">{signal.reasoning}</p>
+            <p className="text-xs text-gray-300 leading-relaxed">{signal.reasoning ?? 'No reasoning available.'}</p>
           </div>
         </div>
       )}

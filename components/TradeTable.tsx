@@ -24,6 +24,7 @@ type SortDir = 'asc' | 'desc';
 const STATUS_STYLES: Record<TradeStatus, string> = {
   OPEN: 'bg-nexus-blue/10 text-nexus-blue border-nexus-blue/20',
   CLOSED: 'bg-muted/10 text-muted border-muted/20',
+  PARTIAL: 'bg-nexus-yellow/10 text-nexus-yellow border-nexus-yellow/20',
   STOPPED_OUT: 'bg-nexus-red/10 text-nexus-red border-nexus-red/20',
   TAKE_PROFIT: 'bg-nexus-green/10 text-nexus-green border-nexus-green/20',
   CANCELLED: 'bg-gray-500/10 text-gray-500 border-gray-500/20',
@@ -32,6 +33,7 @@ const STATUS_STYLES: Record<TradeStatus, string> = {
 const STATUS_LABELS: Record<TradeStatus, string> = {
   OPEN: 'OPEN',
   CLOSED: 'CLOSED',
+  PARTIAL: 'PARTIAL',
   STOPPED_OUT: 'STOP',
   TAKE_PROFIT: 'TP',
   CANCELLED: 'CANCEL',
@@ -144,8 +146,8 @@ export function TradeTable({
         'Entry Price': t.entry_price,
         'Exit Price': t.exit_price ?? '',
         'Stop Loss': t.stop_loss,
-        'Take Profit': t.take_profit,
-        Size: t.size,
+        'Take Profit': t.take_profit_1,
+        Size: t.quantity,
         'P&L': t.pnl ?? '',
         'P&L %': t.pnl_pct ?? '',
         'Entry Time': t.entry_time,
@@ -194,7 +196,7 @@ export function TradeTable({
               <th className="py-2 px-3 text-xs font-medium text-muted uppercase tracking-wider text-right">Dir</th>
               <SortableHeader label="Entry" {...sortHeaderProps('entry_price', 'right')} />
               <SortableHeader label="Exit" {...sortHeaderProps('exit_price', 'right')} />
-              <SortableHeader label="Size" {...sortHeaderProps('size', 'right')} />
+              <SortableHeader label="Size" {...sortHeaderProps('quantity', 'right')} />
               <SortableHeader label="P&L $" {...sortHeaderProps('pnl', 'right')} />
               <SortableHeader label="P&L %" {...sortHeaderProps('pnl_pct', 'right')} />
               <SortableHeader label="Duration" {...sortHeaderProps('duration_minutes', 'right')} />
@@ -255,7 +257,7 @@ export function TradeTable({
                       {trade.exit_price ? trade.exit_price.toFixed(4) : '—'}
                     </td>
                     <td className="py-3 px-3 text-right font-mono text-xs text-white">
-                      {trade.size.toFixed(3)}
+                      {(trade.quantity ?? 0).toFixed(3)}
                     </td>
                     <td className="py-3 px-3 text-right">
                       <span className={cn('font-mono text-sm font-medium', getPnlColor(pnl))}>

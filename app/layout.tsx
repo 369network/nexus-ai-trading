@@ -24,6 +24,7 @@ import {
   ChevronRight,
   Menu,
   X,
+  ScanSearch,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { useRealtimeData } from '@/hooks/useRealtimeData';
@@ -35,6 +36,7 @@ const inter = Inter({ subsets: ['latin'] });
 const NAV_ITEMS = [
   { href: '/', label: 'Overview', icon: LayoutDashboard },
   { href: '/crypto', label: 'Crypto', icon: Bitcoin },
+  { href: '/scanner', label: 'Scanner', icon: ScanSearch },
   { href: '/forex', label: 'Forex', icon: TrendingUp },
   { href: '/commodities', label: 'Commodities', icon: Wheat },
   { href: '/indian-stocks', label: 'Indian Stocks', icon: IndianRupee },
