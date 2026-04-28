@@ -876,7 +876,7 @@ class NexusAlpha:
 
             try:
                 if self.execution_engine is not None:
-                    state = await self.execution_engine.get_portfolio_state()
+                    state = self.execution_engine.get_portfolio_state()
                     if state is not None:
                         equity = float(getattr(state, "equity", None) or getattr(state, "portfolio_value", 0) or 0)
                         daily_pnl = float(getattr(state, "daily_pnl", 0) or 0)
@@ -887,6 +887,22 @@ class NexusAlpha:
                         METRICS.daily_pnl.set(daily_pnl)
                         METRICS.open_positions.set(num_open)
                         METRICS.current_drawdown_pct.set(drawdown_pct)
+
+                        # Win rate from closed trade history
+                        try:
+                            history = getattr(state, "trade_history", None) or []
+                            if history:
+                                _wins = sum(1 for t in history if float(getattr(t, "pnl", 0) or 0) > 0)
+                                METRICS.win_rate.set(round(_wins / len(history), 4))
+                        except Exception:
+                            pass
+
+                        # Active strategies = number of enabled market orchestrators
+                        try:
+                            _n_strats = len(self.market_orchestrators)
+                            METRICS.active_strategies.set(_n_strats)
+                        except Exception:
+                            pass
 
                         # Telegram drawdown alert at 5% threshold
                         _last_dd = getattr(self, "_last_dd_alert_pct", 0.0)

@@ -125,6 +125,12 @@ class NexusMetrics:
     current_drawdown_pct: Gauge = field(init=False)
     """Current drawdown from equity peak as a negative percentage."""
 
+    win_rate: Gauge = field(init=False)
+    """Rolling win rate (0–1) across the last N closed trades."""
+
+    active_strategies: Gauge = field(init=False)
+    """Number of strategy instances currently generating signals."""
+
     # ------------------------------------------------------------------
     # Histograms
     # ------------------------------------------------------------------
@@ -210,6 +216,14 @@ class NexusMetrics:
         self.current_drawdown_pct = Gauge(
             "nexus_current_drawdown_pct",
             "Current drawdown from equity peak as a percentage (negative)",
+        )
+        self.win_rate = Gauge(
+            "nexus_win_rate",
+            "Rolling win rate (0–1) across the last N closed trades",
+        )
+        self.active_strategies = Gauge(
+            "nexus_active_strategies",
+            "Number of strategy instances currently generating signals",
         )
 
     def _init_histograms(self) -> None:

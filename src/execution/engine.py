@@ -256,6 +256,21 @@ class ExecutionEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Portfolio state passthrough
+    # ------------------------------------------------------------------
+
+    def get_portfolio_state(self) -> Any:
+        """
+        Return the executor's current portfolio state.
+
+        Delegates to the underlying executor so callers don't need to know
+        whether they're talking to a PaperTrader or LiveExecutor.
+        """
+        if hasattr(self._executor, "get_portfolio_state"):
+            return self._executor.get_portfolio_state()
+        return None
+
+    # ------------------------------------------------------------------
     # Health check
     # ------------------------------------------------------------------
 
