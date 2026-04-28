@@ -1,0 +1,173 @@
+# =============================================================================
+# NEXUS ALPHA — Crypto Market Configuration
+# =============================================================================
+
+market: crypto
+enabled: true
+base_currency: USDT
+
+# ---------------------------------------------------------------------------
+# Exchanges
+# ---------------------------------------------------------------------------
+exchanges:
+  primary:
+    id: binance
+    ccxt_id: binance
+    rate_limit_rps: 10          # requests per second
+    order_book_depth: 20
+    ws_streams:
+      - kline_1m
+      - kline_5m
+      - kline_15m
+      - bookTicker
+      - aggTrade
+    timeout_ms: 5000
+    retry_count: 3
+
+  fallbacks:
+    - id: bybit
+      ccxt_id: bybit
+      rate_limit_rps: 5
+      order_book_depth: 20
+      ws_streams:
+        - kline_1
+        - kline_5
+        - kline_15
+        - orderbook.1
+      timeout_ms: 5000
+      retry_count: 3
+
+    - id: okx
+      ccxt_id: okx
+      rate_limit_rps: 5
+      order_book_depth: 20
+      ws_streams:
+        - candle1m
+        - candle5m
+        - candle15m
+        - books5
+      timeout_ms: 5000
+      retry_count: 3
+
+# ---------------------------------------------------------------------------
+# Watchlists (by tier — higher tier = more capital allocated)
+# ---------------------------------------------------------------------------
+watchlists:
+  tier1:              # Large-cap, highest liquidity
+    allocation_pct: 50
+    symbols:
+      - BTC/USDT
+      - ETH/USDT
+      - BNB/USDT
+      - SOL/USDT
+      - XRP/USDT
+
+  tier2:              # Mid-cap, solid liquidity
+    allocation_pct: 30
+    symbols:
+      - ADA/USDT
+      - AVAX/USDT
+      - DOT/USDT
+      - MATIC/USDT
+      - LINK/USDT
+      - UNI/USDT
+      - ATOM/USDT
+      - LTC/USDT
+      - BCH/USDT
+      - NEAR/USDT
+
+  tier3:              # Small-mid cap, moderate liquidity
+    allocation_pct: 15
+    symbols:
+      - APT/USDT
+      - ARB/USDT
+      - OP/USDT
+      - INJ/USDT
+      - SUI/USDT
+      - TIA/USDT
+      - FET/USDT
+      - AGIX/USDT
+      - RNDR/USDT
+      - GRT/USDT
+
+  tier4:              # Speculative / high-beta
+    allocation_pct: 5
+    symbols:
+      - PEPE/USDT
+      - WIF/USDT
+      - BONK/USDT
+      - FLOKI/USDT
+      - SHIB/USDT
+
+# ---------------------------------------------------------------------------
+# Timeframes
+# ---------------------------------------------------------------------------
+timeframes:
+  primary: 15m
+  secondary:
+    - 1m
+    - 5m
+    - 1h
+    - 4h
+    - 1d
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  momentum_breakout:
+    enabled: true
+    timeframe: 15m
+    lookback_bars: 100
+    breakout_atr_mult: 1.5
+    volume_confirm_mult: 1.8     # Volume must be 1.8x average
+    min_adx: 25
+    stop_atr_mult: 1.5
+    target_rr: 2.0               # Risk:Reward ratio
+
+  mean_reversion:
+    enabled: true
+    timeframe: 1h
+    bb_period: 20
+    bb_std: 2.0
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    min_squeeze_periods: 5
+    stop_pct: 0.015              # 1.5% stop
+
+  whale_detector:
+    enabled: true
+    whale_alert_min_usd: 1_000_000
+    large_trade_mult: 5.0        # Trade > 5x avg = whale signal
+    order_book_imbalance_threshold: 0.70
+    response_delay_ms: 500       # Wait before entry to confirm
+
+  funding_arbitrage:
+    enabled: true
+    min_funding_rate_pct: 0.05   # 0.05% per 8h = 54% APR
+    max_basis_pct: 0.30          # Max spot-perp basis
+    holding_periods: [8h, 24h]
+    rebalance_interval: 8h
+
+# ---------------------------------------------------------------------------
+# Risk Parameters
+# ---------------------------------------------------------------------------
+risk:
+  max_position_pct: 10.0         # Max 10% of total portfolio per position
+  max_open_positions: 8
+  max_market_exposure_pct: 40.0  # Max 40% portfolio in crypto
+  stop_loss_default_pct: 2.0
+  trailing_stop_pct: 1.5
+  max_slippage_pct: 0.15
+  min_liquidity_usd: 500_000     # 24h volume minimum
+
+# ---------------------------------------------------------------------------
+# Data collection
+# ---------------------------------------------------------------------------
+data:
+  candle_history_days: 365
+  tick_buffer_size: 10_000
+  orderbook_snapshot_interval_s: 5
+  funding_rate_poll_interval_s: 60
+  open_interest_poll_interval_s: 300

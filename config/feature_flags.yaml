@@ -1,0 +1,241 @@
+# =============================================================================
+# NEXUS ALPHA — Feature Flags
+# =============================================================================
+# Controls which markets, agents, features, learning modules, and safety
+# systems are active. Change flags here without touching code.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Market toggles — enable/disable entire markets
+# ---------------------------------------------------------------------------
+markets:
+  crypto:
+    enabled: true
+    paper_only: true            # Force paper even if PAPER_MODE=false
+    binance_primary: true
+    bybit_fallback: true
+    okx_fallback: true
+
+  forex:
+    enabled: true
+    paper_only: false
+    oanda_primary: true
+
+  commodities:
+    enabled: true
+    paper_only: false
+    gold: true
+    silver: true
+    wti_oil: true
+    brent_oil: true
+
+  indian_stocks:
+    enabled: true
+    paper_only: false
+    nifty50: true
+    banknifty: true
+    fo_segment: true
+    gap_trading: true
+
+  us_stocks:
+    enabled: true
+    paper_only: false
+    sp500_watchlist: true
+    sector_etfs: true
+    orb_strategy: true
+    earnings_plays: true
+
+# ---------------------------------------------------------------------------
+# Agent toggles
+# ---------------------------------------------------------------------------
+agents:
+  # Market analysis agents
+  macro_analyst:
+    enabled: true
+    model: anthropic             # anthropic | openai | ollama
+    run_interval_hours: 6
+
+  technical_analyst:
+    enabled: true
+    model: anthropic
+    run_interval_minutes: 15
+
+  sentiment_analyst:
+    enabled: true
+    model: openai
+    run_interval_hours: 1
+
+  risk_manager:
+    enabled: true
+    model: anthropic
+    run_interval_seconds: 30    # Runs very frequently
+
+  portfolio_optimizer:
+    enabled: true
+    model: anthropic
+    run_interval_hours: 4
+
+  execution_agent:
+    enabled: true
+    model: null                  # Rule-based, no LLM needed
+    run_interval_seconds: 1
+
+  # Specialized sub-agents
+  whale_detector:
+    enabled: true
+    model: null                  # Rule-based
+    min_trade_usd: 1_000_000
+
+  news_monitor:
+    enabled: true
+    model: openai                # Faster/cheaper for NLP
+    sources:
+      - reuters
+      - bloomberg
+      - coindesk
+      - investing_com
+      - moneycontrol
+    run_interval_minutes: 5
+
+  social_sentiment:
+    enabled: false               # Disabled by default (high noise)
+    model: openai
+    sources:
+      - reddit
+      - twitter
+    run_interval_minutes: 30
+
+  option_chain_reader:
+    enabled: true
+    model: null
+    applies_to: [indian_stocks, us_stocks]
+    run_interval_minutes: 5
+
+  fii_dii_tracker:
+    enabled: true
+    model: null
+    applies_to: [indian_stocks]
+    run_interval_minutes: 15
+
+  dream_mode:
+    enabled: true                # Overnight strategy discovery
+    model: anthropic
+    run_time_utc: "21:00"        # 9 PM UTC (after US market close)
+    max_duration_hours: 6
+    max_llm_cost_usd: 3.00
+
+# ---------------------------------------------------------------------------
+# Feature toggles — specific system capabilities
+# ---------------------------------------------------------------------------
+features:
+  # Execution
+  live_trading: false           # Master switch — false = paper always
+  order_types:
+    market_orders: true
+    limit_orders: true
+    stop_limit_orders: true
+    trailing_stops: true
+    bracket_orders: true
+
+  # Data collection
+  tick_data_recording: true
+  orderbook_recording: false    # High storage cost; off by default
+  trade_tape_recording: true
+  funding_rate_monitoring: true
+  open_interest_monitoring: true
+
+  # Analytics
+  real_time_pnl: true
+  portfolio_attribution: true
+  drawdown_monitoring: true
+  correlation_monitoring: true
+
+  # Notifications
+  trade_notifications: true
+  pnl_summary_daily: true
+  pnl_summary_weekly: true
+  circuit_breaker_alerts: true
+  risk_alerts: true
+  llm_cost_alerts: true
+
+  # Backtesting
+  backtesting_enabled: true
+  forward_walk_validation: true
+  monte_carlo_simulation: true
+
+  # Dashboard
+  prometheus_metrics: true
+  grafana_dashboard: true
+  web_dashboard: true
+
+  # Multi-exchange
+  smart_order_routing: true     # Route to best exchange automatically
+  cross_exchange_arbitrage: false  # Disabled — high risk/complexity
+
+# ---------------------------------------------------------------------------
+# Learning toggles
+# ---------------------------------------------------------------------------
+learning:
+  model_performance_tracking: true
+  brier_score_calculation: true  # Calibration tracking for LLM predictions
+  strategy_parameter_adaptation: false  # Auto-tune params (experimental)
+  memory_compression: true       # Compress old memories to save tokens
+  pattern_recognition: true      # Store successful trade patterns
+  failure_analysis: true         # Analyze losing trades for lessons
+
+  memory_tiers:
+    short_term:
+      enabled: true
+      max_entries: 100
+      retention_hours: 24
+    medium_term:
+      enabled: true
+      max_entries: 500
+      retention_days: 30
+    long_term:
+      enabled: true
+      max_entries: 5000
+      retention_days: 365
+      compression_enabled: true
+
+  dream_mode:
+    strategy_backtesting: true
+    new_strategy_discovery: true
+    parameter_optimization: true
+    correlation_research: true
+    regime_analysis: true
+
+# ---------------------------------------------------------------------------
+# Safety toggles
+# ---------------------------------------------------------------------------
+safety:
+  circuit_breakers:
+    CB1_flash_crash: true
+    CB2_consecutive_losses: true
+    CB3_spread_anomaly: true
+    CB4_api_errors: true
+    CB5_correlation_spike: true
+    CB6_portfolio_drawdown: true
+
+  position_limits_enforcement: true
+  daily_stop_enforcement: true
+  drawdown_monitoring: true
+  duplicate_order_check: true   # Prevent double-fills
+  sanity_checks:
+    order_size_max_pct: 20.0    # Reject any single order > 20% portfolio
+    price_deviation_pct: 5.0   # Reject if order price > 5% from market
+    enabled: true
+
+  emergency_shutdown:
+    enabled: true
+    triggers:
+      - manual_command
+      - CB6_level_5
+      - all_exchanges_down
+
+  audit_log:
+    enabled: true
+    log_all_orders: true
+    log_all_decisions: true
+    log_all_risk_events: true
+    retention_days: 365

@@ -1,0 +1,79 @@
+# =============================================================================
+# NEXUS ALPHA Dashboard — Next.js 14 Multi-stage Dockerfile
+# Base: node:20-alpine
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: dependencies
+# ---------------------------------------------------------------------------
+FROM node:20-alpine AS deps
+
+# Install libc compatibility for native modules
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Copy package manifests
+COPY dashboard/package.json dashboard/package-lock.json* dashboard/yarn.lock* ./
+
+# Install dependencies (prefer npm ci for reproducibility)
+RUN \
+    if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+    elif [ -f package-lock.json ]; then npm ci; \
+    else npm i; fi
+
+# ---------------------------------------------------------------------------
+# Stage 2: builder
+# ---------------------------------------------------------------------------
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy all dashboard source
+COPY dashboard/ .
+
+# Set build-time environment variables
+ARG NEXT_PUBLIC_API_URL=http://nexus-bot:8080
+ARG NEXT_PUBLIC_WS_URL=ws://nexus-bot:8080
+ARG NEXT_PUBLIC_APP_VERSION=1.0.0
+
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+ENV NEXT_PUBLIC_APP_VERSION=${NEXT_PUBLIC_APP_VERSION}
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Build the Next.js application
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 3: runner (production)
+# ---------------------------------------------------------------------------
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Security: non-root user
+RUN addgroup --system --gid 1002 dashboard \
+    && adduser --system --uid 1002 --ingroup dashboard dashboard
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Copy Next.js standalone output (minimized)
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=dashboard:dashboard /app/.next/standalone ./
+COPY --from=builder --chown=dashboard:dashboard /app/.next/static ./.next/static
+
+USER dashboard
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1
+
+CMD ["node", "server.js"]

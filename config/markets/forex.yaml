@@ -1,0 +1,298 @@
+# =============================================================================
+# NEXUS ALPHA — Forex Market Configuration
+# =============================================================================
+
+market: forex
+enabled: true
+broker: oanda
+
+# ---------------------------------------------------------------------------
+# Trading pairs (20 pairs)
+# ---------------------------------------------------------------------------
+pairs:
+  majors:
+    - symbol: EUR/USD
+      pip_size: 0.0001
+      max_spread_pips: 2.0
+      typical_spread_pips: 0.6
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: GBP/USD
+      pip_size: 0.0001
+      max_spread_pips: 2.5
+      typical_spread_pips: 0.8
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: USD/JPY
+      pip_size: 0.01
+      max_spread_pips: 2.0
+      typical_spread_pips: 0.7
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: USD/CHF
+      pip_size: 0.0001
+      max_spread_pips: 2.5
+      typical_spread_pips: 0.9
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: AUD/USD
+      pip_size: 0.0001
+      max_spread_pips: 2.5
+      typical_spread_pips: 0.8
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: USD/CAD
+      pip_size: 0.0001
+      max_spread_pips: 2.5
+      typical_spread_pips: 1.0
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: NZD/USD
+      pip_size: 0.0001
+      max_spread_pips: 3.0
+      typical_spread_pips: 1.2
+      lot_size: 100000
+      margin_pct: 3.3
+
+  minors:
+    - symbol: EUR/GBP
+      pip_size: 0.0001
+      max_spread_pips: 3.0
+      typical_spread_pips: 1.0
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: EUR/JPY
+      pip_size: 0.01
+      max_spread_pips: 3.0
+      typical_spread_pips: 1.1
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: EUR/CHF
+      pip_size: 0.0001
+      max_spread_pips: 3.5
+      typical_spread_pips: 1.3
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: GBP/JPY
+      pip_size: 0.01
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.5
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: AUD/JPY
+      pip_size: 0.01
+      max_spread_pips: 3.5
+      typical_spread_pips: 1.4
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: CAD/JPY
+      pip_size: 0.01
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.6
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: CHF/JPY
+      pip_size: 0.01
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.6
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: GBP/AUD
+      pip_size: 0.0001
+      max_spread_pips: 5.0
+      typical_spread_pips: 2.0
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: EUR/AUD
+      pip_size: 0.0001
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.7
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: EUR/CAD
+      pip_size: 0.0001
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.8
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: GBP/CHF
+      pip_size: 0.0001
+      max_spread_pips: 5.0
+      typical_spread_pips: 2.2
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: AUD/NZD
+      pip_size: 0.0001
+      max_spread_pips: 4.0
+      typical_spread_pips: 1.8
+      lot_size: 100000
+      margin_pct: 3.3
+
+    - symbol: USD/SGD
+      pip_size: 0.0001
+      max_spread_pips: 5.0
+      typical_spread_pips: 2.5
+      lot_size: 100000
+      margin_pct: 5.0
+
+# ---------------------------------------------------------------------------
+# Session windows (all times in UTC)
+# ---------------------------------------------------------------------------
+sessions:
+  sydney:
+    open: "22:00"           # 10 PM UTC (Sun–Fri)
+    close: "07:00"          # 7 AM UTC
+    tz: Australia/Sydney
+    active_pairs:
+      - AUD/USD
+      - NZD/USD
+      - AUD/JPY
+      - AUD/NZD
+    volatility_mult: 0.7    # Relative to NY session
+
+  tokyo:
+    open: "00:00"           # Midnight UTC
+    close: "09:00"          # 9 AM UTC
+    tz: Asia/Tokyo
+    active_pairs:
+      - USD/JPY
+      - EUR/JPY
+      - GBP/JPY
+      - AUD/JPY
+      - CAD/JPY
+      - CHF/JPY
+    volatility_mult: 0.8
+
+  london:
+    open: "08:00"           # 8 AM UTC
+    close: "17:00"          # 5 PM UTC
+    tz: Europe/London
+    active_pairs:
+      - EUR/USD
+      - GBP/USD
+      - EUR/GBP
+      - EUR/CHF
+      - GBP/CHF
+      - EUR/CAD
+    volatility_mult: 1.2
+
+  new_york:
+    open: "13:00"           # 1 PM UTC
+    close: "22:00"          # 10 PM UTC
+    tz: America/New_York
+    active_pairs:
+      - EUR/USD
+      - GBP/USD
+      - USD/JPY
+      - USD/CAD
+      - USD/CHF
+    volatility_mult: 1.5    # Highest volume session
+
+  london_ny_overlap:
+    start: "13:00"
+    end: "17:00"
+    preferred: true
+    note: "Highest liquidity window — prefer trading here"
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  london_breakout:
+    enabled: true
+    range_start_utc: "07:00"   # Capture pre-London range
+    range_end_utc: "08:00"
+    breakout_buffer_pips: 5
+    stop_beyond_range_pips: 10
+    target_rr: 2.0
+    max_trade_duration_hours: 6
+    pairs: [EUR/USD, GBP/USD, EUR/GBP, USD/JPY]
+
+  asian_range_play:
+    enabled: true
+    range_start_utc: "00:00"
+    range_end_utc: "07:00"
+    min_range_pips: 30
+    max_range_pips: 80
+    target_rr: 1.5
+    pairs: [USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY]
+
+  trend_follow:
+    enabled: true
+    timeframe: 4h
+    ema_fast: 20
+    ema_slow: 50
+    atr_period: 14
+    stop_atr_mult: 1.5
+    target_rr: 2.5
+    pairs:
+      - EUR/USD
+      - GBP/USD
+      - USD/JPY
+      - AUD/USD
+      - USD/CAD
+
+  news_fade:
+    enabled: true
+    spike_pips_threshold: 30
+    fade_delay_seconds: 60
+    max_retracement_pct: 0.618
+    stop_beyond_spike_pips: 15
+    high_impact_events:
+      - NFP
+      - FOMC
+      - CPI_US
+      - GDP_US
+      - BOE_RATE
+      - ECB_RATE
+      - RBA_RATE
+
+# ---------------------------------------------------------------------------
+# Risk Parameters
+# ---------------------------------------------------------------------------
+risk:
+  max_position_pct: 5.0
+  max_open_positions: 6
+  max_market_exposure_pct: 25.0
+  max_pairs_same_session: 3
+  stop_loss_default_pips: 30
+  max_daily_drawdown_pct: 3.0
+  correlation_halt_threshold: 0.85  # If 2 open trades corr > this → no new
+
+# ---------------------------------------------------------------------------
+# Economic calendar
+# ---------------------------------------------------------------------------
+economic_calendar:
+  halt_before_high_impact_minutes: 15
+  halt_after_high_impact_minutes: 30
+  high_impact_events:
+    - NFP                   # Non-Farm Payrolls (USD)
+    - FOMC_RATE             # Fed rate decision
+    - FOMC_MINUTES
+    - CPI_US
+    - GDP_US
+    - ISM_MANUFACTURING
+    - BOE_RATE              # Bank of England rate
+    - ECB_RATE              # European Central Bank rate
+    - RBA_RATE              # Reserve Bank of Australia rate
+    - BOJ_RATE              # Bank of Japan rate
+    - SNB_RATE              # Swiss National Bank rate
+    - CAD_EMPLOYMENT
+    - AUSTRALIA_CPI

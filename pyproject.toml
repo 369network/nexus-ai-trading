@@ -1,0 +1,148 @@
+[tool.poetry]
+name = "nexus-alpha"
+version = "0.1.0"
+description = "NEXUS ALPHA - Multi-Market AI Trading System"
+authors = ["NEXUS ALPHA Team"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.15"
+
+# ── AI / LLM ──────────────────────────────────────────────────────────────────
+anthropic = "^0.34"
+openai = "^1.40"
+httpx = "^0.27"
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+pandas = "^2.2"
+numpy = "^1.26"
+scikit-learn = "^1.4"
+# pandas-ta: pre-release package, install separately if needed
+# ta-lib: requires native C binary, install separately (pip install ta-lib-binary)
+
+# ── Exchange Connectors ────────────────────────────────────────────────────────
+ccxt = {extras = ["async"], version = "^4.2"}
+python-binance = "^1.0"
+alpaca-py = "^0.26"
+yfinance = "^0.2.36"
+
+# ── Zerodha / NSE ─────────────────────────────────────────────────────────────
+kiteconnect = "^5.0"
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy = {extras = ["asyncio"], version = "^2.0"}
+alembic = "^1.13"
+asyncpg = "^0.29"
+supabase = "^2.4"
+
+# ── Async / Web ───────────────────────────────────────────────────────────────
+fastapi = "^0.111"
+uvicorn = {extras = ["standard"], version = "^0.29"}
+websockets = "^12.0"
+aiohttp = "^3.9"
+
+# ── Config / Serialisation ─────────────────────────────────────────────────────
+pydantic = "^2.6"
+pydantic-settings = "^2.2"
+pyyaml = "^6.0"
+python-dotenv = "^1.0"
+pyarrow = "^16.0"
+
+# ── Auth / Security ────────────────────────────────────────────────────────────
+python-jose = {extras = ["cryptography"], version = "^3.3"}
+pyjwt = "^2.8"
+cryptography = "^42.0"
+pyotp = "^2.9"
+
+# ── Scheduling / Reliability ───────────────────────────────────────────────────
+apscheduler = "^3.10"
+tenacity = "^8.2"
+
+# ── Logging / Monitoring ───────────────────────────────────────────────────────
+structlog = "^24.1"
+prometheus-client = "^0.20"
+psutil = "^5.9"
+redis = {extras = ["asyncio"], version = "^5.0"}
+
+# ── Alerts ─────────────────────────────────────────────────────────────────────
+python-telegram-bot = "^21.0"
+discord-webhook = "^1.3"
+
+# ── News / Social Data ─────────────────────────────────────────────────────────
+feedparser = "^6.0"
+praw = "^7.7"
+asyncpraw = "^7.7"
+tweepy = "^4.14"
+pytrends = "^4.9"
+python-levenshtein = "^0.25"
+
+# ── Backtesting ────────────────────────────────────────────────────────────────
+backtrader = "^1.9"
+
+# ── Utilities ──────────────────────────────────────────────────────────────────
+pytz = "^2024.1"
+
+# ── Reporting ──────────────────────────────────────────────────────────────────
+plotly = "^5.22"
+
+[tool.poetry.group.ml.dependencies]
+# Heavy ML — install separately: poetry install --with ml
+torch = {version = "^2.2", optional = true}
+
+[tool.poetry.group.ib.dependencies]
+# Interactive Brokers — install separately: poetry install --with ib
+ib_insync = {version = "^0.9", optional = true}
+
+[tool.poetry.group.cloud.dependencies]
+# Google Cloud — install separately: poetry install --with cloud
+google-cloud-bigquery = {version = "^3.21", optional = true}
+
+[tool.poetry.group.reports.dependencies]
+# WeasyPrint for PDF reports — install separately: poetry install --with reports
+weasyprint = {version = "^62.3", optional = true}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-asyncio = "*"
+pytest-httpx = "*"
+black = "*"
+ruff = "*"
+mypy = "*"
+pytest-cov = "*"
+ipython = "*"
+rich = "*"
+httpx = {extras = ["asyncio"], version = "*"}
+
+[tool.poetry.scripts]
+nexus-paper = "src.main:run_paper"
+nexus-live = "src.main:run_live"
+nexus-backtest = "src.main:run_backtest"
+nexus-dream = "src.main:run_dream"
+nexus-dashboard = "src.main:run_dashboard"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -1,0 +1,259 @@
+# =============================================================================
+# NEXUS ALPHA — Circuit Breakers Configuration
+# =============================================================================
+# All 6 circuit breakers. When triggered, the specified action is taken.
+# Actions: halt_market | halt_all | reduce_size | close_positions | shutdown
+# =============================================================================
+
+circuit_breakers:
+
+  # --------------------------------------------------------------------------
+  # CB1: Flash Crash Detector
+  # --------------------------------------------------------------------------
+  CB1:
+    name: flash_crash_detector
+    description: >
+      Detects rapid price drops that indicate flash crash conditions.
+      Halts trading on the affected instrument/market for recovery period.
+    enabled: true
+
+    trigger:
+      condition: price_drop_pct_in_window
+      drop_pct: 5.0             # 5% price drop
+      window_minutes: 5         # within 5 minutes
+      confirmation_bars: 2      # Must persist for 2 bars (not a single spike)
+
+    scope: per_instrument       # Triggered per symbol, not market-wide
+
+    action:
+      type: halt_market
+      halt_duration_minutes: 60
+      close_existing_positions: false   # Let positions ride; just no new trades
+      alert_level: critical
+      notify: [telegram, discord]
+
+    reset:
+      auto_reset: true
+      manual_review_required: false
+      resume_condition: price_stabilized  # Price within 2% of pre-crash level
+
+  # --------------------------------------------------------------------------
+  # CB2: Consecutive Loss Limit
+  # --------------------------------------------------------------------------
+  CB2:
+    name: consecutive_loss_limit
+    description: >
+      Limits damage from systematic failures or adverse market conditions
+      by reducing position sizes and pausing new trades after consecutive losses.
+    enabled: true
+
+    trigger:
+      condition: consecutive_losses
+      count: 3                  # 3 consecutive losing trades
+      scope: per_strategy       # Tracked per strategy, not globally
+
+    action:
+      type: reduce_and_pause
+      size_reduction_pct: 50   # Reduce new position size by 50%
+      halt_duration_hours: 2
+      alert_level: warning
+      notify: [telegram]
+
+    reset:
+      auto_reset: true
+      reset_on: winning_trade   # Reset counter after 1 winning trade
+      manual_review_required: false
+
+    escalation:
+      - after_count: 5          # 5 consecutive losses → stronger action
+        action:
+          type: halt_strategy
+          halt_duration_hours: 24
+          alert_level: critical
+          notify: [telegram, discord]
+      - after_count: 8          # 8 consecutive losses → halt all trading
+        action:
+          type: halt_all
+          halt_duration_hours: 48
+          alert_level: critical
+          notify: [telegram, discord]
+
+  # --------------------------------------------------------------------------
+  # CB3: Spread Anomaly Detector
+  # --------------------------------------------------------------------------
+  CB3:
+    name: spread_anomaly_detector
+    description: >
+      Detects abnormally wide bid-ask spreads that indicate low liquidity,
+      exchange issues, or extreme volatility. Halts trading on that pair.
+    enabled: true
+
+    trigger:
+      condition: spread_gt_normal_mult
+      multiplier: 3.0           # Spread > 3x rolling normal spread
+      rolling_period_minutes: 60
+      confirmation_ticks: 3     # Must be wide for 3 consecutive ticks
+
+    scope: per_instrument
+
+    action:
+      type: halt_instrument
+      halt_duration_minutes: 30
+      close_existing_positions: false
+      alert_level: warning
+      notify: [telegram]
+
+    reset:
+      auto_reset: true
+      resume_condition: spread_normalized
+      spread_normalize_threshold_mult: 1.5  # Resume when spread < 1.5x normal
+
+  # --------------------------------------------------------------------------
+  # CB4: API Error Rate Limiter
+  # --------------------------------------------------------------------------
+  CB4:
+    name: api_error_rate_limiter
+    description: >
+      Protects against exchange API issues, network failures, or broker
+      outages. If errors spike, halt all trading to prevent bad order state.
+    enabled: true
+
+    trigger:
+      condition: api_errors_in_window
+      error_count: 5            # 5 API errors
+      window_seconds: 60        # within 60 seconds
+      error_types:
+        - connection_timeout
+        - rate_limit_429
+        - server_error_5xx
+        - order_rejected
+        - invalid_response
+
+    scope: per_exchange         # Per exchange, not global
+
+    action:
+      type: halt_exchange
+      halt_duration_minutes: 15
+      fallback_exchange: true   # Try fallback exchange if available
+      alert_level: critical
+      notify: [telegram, discord]
+
+    reset:
+      auto_reset: true
+      resume_condition: successful_api_calls
+      required_successful_calls: 5         # 5 clean calls before resuming
+
+    escalation:
+      - after_exchanges: all_halted         # If all exchanges hit CB4
+        action:
+          type: halt_all
+          halt_duration_minutes: 30
+          alert_level: critical
+
+  # --------------------------------------------------------------------------
+  # CB5: Cross-Market Correlation Spike
+  # --------------------------------------------------------------------------
+  CB5:
+    name: correlation_spike_detector
+    description: >
+      Detects when cross-market correlations spike above threshold, indicating
+      systemic risk (e.g., risk-off event). Reduces overall exposure.
+    enabled: true
+
+    trigger:
+      condition: correlation_spike
+      threshold: 0.85           # Pairwise correlation > 0.85
+      asset_pairs:
+        - [BTC/USDT, ETH/USDT]
+        - [BTC/USDT, EUR/USD]   # Crypto-forex correlation in crisis
+        - [NIFTY, SPY]          # India-US correlation
+        - [XAU_USD, USD/JPY]    # Gold-Yen safe haven correlation
+      rolling_period_hours: 4
+      min_pairs_breached: 2     # At least 2 pairs must exceed threshold
+
+    action:
+      type: reduce_exposure
+      exposure_reduction_pct: 30    # Reduce all open positions by 30%
+      block_new_entries: true
+      block_duration_hours: 4
+      alert_level: warning
+      notify: [telegram]
+
+    reset:
+      auto_reset: true
+      resume_condition: correlation_normalized
+      correlation_normalize_threshold: 0.70
+
+  # --------------------------------------------------------------------------
+  # CB6: Portfolio Drawdown Emergency
+  # --------------------------------------------------------------------------
+  CB6:
+    name: portfolio_drawdown_emergency
+    description: >
+      Multi-level response to portfolio drawdown. Progressive response
+      from pause to full emergency shutdown as losses deepen.
+    enabled: true
+
+    levels:
+      level_1:
+        drawdown_pct: 15.0
+        action:
+          type: reduce_size
+          new_size_pct: 75      # Trade at 75% of normal size
+          alert_level: warning
+          notify: [telegram]
+
+      level_2:
+        drawdown_pct: 20.0
+        action:
+          type: reduce_size
+          new_size_pct: 50      # Trade at 50% of normal size
+          alert_level: warning
+          notify: [telegram, discord]
+
+      level_3:
+        drawdown_pct: 25.0
+        action:
+          type: pause_new_entries
+          manage_existing: true # Continue managing (trailing stops etc)
+          alert_level: critical
+          notify: [telegram, discord]
+
+      level_4:
+        drawdown_pct: 30.0
+        action:
+          type: pause_all
+          close_losing_positions: false  # Don't panic-close, just pause new
+          manual_review_required: true
+          alert_level: critical
+          notify: [telegram, discord]
+
+      level_5:
+        drawdown_pct: 40.0
+        action:
+          type: emergency_shutdown
+          close_all_positions: true
+          halt_all_trading: true
+          manual_restart_required: true
+          alert_level: critical
+          notify: [telegram, discord]
+
+    measurement:
+      drawdown_from: peak_equity          # From highest equity watermark
+      rolling_period_days: 30             # 30-day rolling drawdown
+      include_unrealized: true            # Count open P&L
+
+    reset:
+      auto_reset: false          # Must manually reset after emergency shutdown
+      manual_reset_levels: [level_4, level_5]
+      auto_reset_levels: [level_1, level_2, level_3]
+
+# ---------------------------------------------------------------------------
+# Global circuit breaker settings
+# ---------------------------------------------------------------------------
+global:
+  check_interval_seconds: 5     # How often to evaluate circuit breakers
+  log_all_evaluations: false    # Only log when triggered (reduce noise)
+  log_triggers: true
+  state_persistence: true        # Persist breaker state across restarts
+  state_file: ".nexus/circuit_breaker_state.json"

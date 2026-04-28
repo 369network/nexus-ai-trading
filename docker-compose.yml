@@ -1,0 +1,207 @@
+version: "3.9"
+
+# =============================================================================
+# NEXUS ALPHA — Production Docker Compose
+# =============================================================================
+
+networks:
+  nexus-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  nexus-logs:
+  nexus-state:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Main trading bot
+  # ---------------------------------------------------------------------------
+  nexus-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: nexus-alpha/bot:latest
+    container_name: nexus-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - nexus-logs:/app/logs
+      - nexus-state:/app/.nexus
+      - ./config:/app/config:ro
+    networks:
+      - nexus-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    ports:
+      - "8080:8080"   # Internal health/metrics endpoint
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+        reservations:
+          cpus: "1.0"
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Data ingestion service (separate process for market data)
+  # ---------------------------------------------------------------------------
+  nexus-data:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: nexus-alpha/bot:latest
+    container_name: nexus-data
+    restart: unless-stopped
+    command: ["python", "-m", "src.data.collector"]
+    env_file:
+      - .env
+    volumes:
+      - nexus-logs:/app/logs
+      - nexus-state:/app/.nexus
+      - ./config:/app/config:ro
+    networks:
+      - nexus-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8081/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    ports:
+      - "8081:8081"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Redis (caching, pub-sub, rate limiting state)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.2-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    networks:
+      - nexus-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 600M
+
+  # ---------------------------------------------------------------------------
+  # Prometheus (metrics collection)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: nexus-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks:
+      - nexus-net
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Grafana (visualization dashboard)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: nexus-grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-nexus_grafana_2024}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/nexus-overview.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - nexus-net
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M

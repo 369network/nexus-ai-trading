@@ -1,0 +1,341 @@
+# =============================================================================
+# NEXUS ALPHA — US Stocks Market Configuration
+# =============================================================================
+
+market: us_stocks
+enabled: true
+broker: alpaca
+exchange: [NYSE, NASDAQ]
+
+# ---------------------------------------------------------------------------
+# Market hours (all times in ET)
+# ---------------------------------------------------------------------------
+market_hours:
+  tz: America/New_York
+  pre_market_open: "04:00"
+  session_open: "09:30"
+  session_close: "16:00"
+  after_hours_close: "20:00"
+  trade_pre_market: false
+  trade_after_hours: false
+
+# ---------------------------------------------------------------------------
+# S&P 500 watchlist — top 100 by market cap
+# ---------------------------------------------------------------------------
+sp500_watchlist:
+  # Technology
+  - AAPL     # Apple
+  - MSFT     # Microsoft
+  - NVDA     # NVIDIA
+  - AMZN     # Amazon
+  - GOOGL    # Alphabet Class A
+  - GOOG     # Alphabet Class C
+  - META     # Meta Platforms
+  - TSLA     # Tesla
+  - AVGO     # Broadcom
+  - ORCL     # Oracle
+  - CRM      # Salesforce
+  - AMD      # Advanced Micro Devices
+  - INTC     # Intel
+  - QCOM     # Qualcomm
+  - TXN      # Texas Instruments
+  - AMAT     # Applied Materials
+  - MU       # Micron Technology
+  - LRCX     # Lam Research
+  - KLAC     # KLA Corporation
+  - MCHP     # Microchip Technology
+  # Financials
+  - BRK.B    # Berkshire Hathaway
+  - JPM      # JP Morgan Chase
+  - V        # Visa
+  - MA       # Mastercard
+  - BAC      # Bank of America
+  - WFC      # Wells Fargo
+  - GS       # Goldman Sachs
+  - MS       # Morgan Stanley
+  - BLK      # BlackRock
+  - SCHW     # Charles Schwab
+  - AXP      # American Express
+  - SPGI     # S&P Global
+  - ICE      # Intercontinental Exchange
+  - CME      # CME Group
+  - PGR      # Progressive
+  # Healthcare
+  - LLY      # Eli Lilly
+  - UNH      # UnitedHealth
+  - JNJ      # Johnson & Johnson
+  - ABBV     # AbbVie
+  - MRK      # Merck
+  - TMO      # Thermo Fisher Scientific
+  - ABT      # Abbott Laboratories
+  - DHR      # Danaher
+  - AMGN     # Amgen
+  - BMY      # Bristol-Myers Squibb
+  - PFE      # Pfizer
+  - GILD     # Gilead Sciences
+  - ISRG     # Intuitive Surgical
+  - SYK      # Stryker
+  - MDT      # Medtronic
+  # Consumer Discretionary
+  - HD       # Home Depot
+  - MCD      # McDonald's
+  - NKE      # Nike
+  - SBUX     # Starbucks
+  - TGT      # Target
+  - LOW      # Lowe's
+  - BKNG     # Booking Holdings
+  - CMG      # Chipotle
+  - GM       # General Motors
+  - F        # Ford
+  # Consumer Staples
+  - WMT      # Walmart
+  - PG       # Procter & Gamble
+  - KO       # Coca-Cola
+  - PEP      # PepsiCo
+  - COST     # Costco
+  - PM       # Philip Morris
+  - MO       # Altria
+  - CL       # Colgate-Palmolive
+  - GIS      # General Mills
+  - K        # Kellanova
+  # Energy
+  - XOM      # Exxon Mobil
+  - CVX      # Chevron
+  - COP      # ConocoPhillips
+  - SLB      # Schlumberger
+  - EOG      # EOG Resources
+  - MPC      # Marathon Petroleum
+  - PSX      # Phillips 66
+  - OXY      # Occidental Petroleum
+  # Industrials
+  - CAT      # Caterpillar
+  - HON      # Honeywell
+  - UPS      # United Parcel Service
+  - BA       # Boeing
+  - LMT      # Lockheed Martin
+  - GE       # GE Aerospace
+  - RTX      # Raytheon Technologies
+  - DE       # Deere & Company
+  - UNP      # Union Pacific
+  - CSX      # CSX Corporation
+  # Communication
+  - NFLX     # Netflix
+  - DIS      # Walt Disney
+  - CMCSA    # Comcast
+  - T        # AT&T
+  - VZ       # Verizon
+  # Utilities & Real Estate
+  - NEE      # NextEra Energy
+  - AMT      # American Tower
+  - PLD      # Prologis
+  - CCI      # Crown Castle
+  - EQIX     # Equinix
+  # Materials
+  - LIN      # Linde
+  - APD      # Air Products
+  - ECL      # Ecolab
+  - NEM      # Newmont
+
+# ---------------------------------------------------------------------------
+# Sector ETFs
+# ---------------------------------------------------------------------------
+sector_etfs:
+  XLF:
+    name: Financial Select Sector SPDR
+    sector: financials
+    weight_in_portfolio: equal
+
+  XLK:
+    name: Technology Select Sector SPDR
+    sector: technology
+    weight_in_portfolio: equal
+
+  XLE:
+    name: Energy Select Sector SPDR
+    sector: energy
+    weight_in_portfolio: equal
+
+  XLV:
+    name: Health Care Select Sector SPDR
+    sector: healthcare
+    weight_in_portfolio: equal
+
+  XLI:
+    name: Industrial Select Sector SPDR
+    sector: industrials
+    weight_in_portfolio: equal
+
+  XLY:
+    name: Consumer Discretionary Select Sector SPDR
+    sector: consumer_discretionary
+    weight_in_portfolio: equal
+
+  XLP:
+    name: Consumer Staples Select Sector SPDR
+    sector: consumer_staples
+    weight_in_portfolio: equal
+
+  XLU:
+    name: Utilities Select Sector SPDR
+    sector: utilities
+    weight_in_portfolio: equal
+
+  XLRE:
+    name: Real Estate Select Sector SPDR
+    sector: real_estate
+    weight_in_portfolio: equal
+
+  XLB:
+    name: Materials Select Sector SPDR
+    sector: materials
+    weight_in_portfolio: equal
+
+  XLC:
+    name: Communication Services Select Sector SPDR
+    sector: communication_services
+    weight_in_portfolio: equal
+
+  # Broad market ETFs for hedging / beta exposure
+  SPY:
+    name: SPDR S&P 500 ETF Trust
+    sector: broad_market
+    use_for_hedging: true
+
+  QQQ:
+    name: Invesco QQQ Trust
+    sector: nasdaq100
+    use_for_hedging: true
+
+  IWM:
+    name: iShares Russell 2000 ETF
+    sector: small_cap
+    use_for_hedging: false
+
+  VIX:
+    name: CBOE Volatility Index (synthetic via VXX)
+    sector: volatility
+    monitor_only: true
+
+# ---------------------------------------------------------------------------
+# Opening Range Breakout (ORB) strategy parameters
+# ---------------------------------------------------------------------------
+orb:
+  enabled: true
+  range_minutes: 30           # 09:30–10:00 = opening range
+  breakout_buffer_pct: 0.10  # 0.1% above/below range high/low
+  stop_beyond_range_pct: 0.15
+  target_rr: 2.0
+  max_range_width_pct: 3.0   # Skip if range is too wide
+  volume_confirm:
+    breakout_volume_mult: 1.5  # Volume must be 1.5x 20-day avg
+  max_trade_duration_hours: 4
+  preferred_symbols:          # ORB works best on high-beta names
+    - NVDA
+    - AMD
+    - TSLA
+    - META
+    - AMZN
+
+# ---------------------------------------------------------------------------
+# Earnings play parameters
+# ---------------------------------------------------------------------------
+earnings:
+  enabled: true
+  pre_earnings_drift:
+    enabled: true
+    entry_days_before: 5      # Enter 5 days before earnings
+    exit_days_before: 1       # Exit 1 day before to avoid IV crush
+    direction: long            # Stocks tend to drift up pre-earnings
+    max_position_pct: 3.0
+
+  post_earnings_gap:
+    enabled: true
+    min_gap_pct: 5.0           # Only trade gaps > 5%
+    fade_threshold_pct: 8.0    # Fade gaps > 8% (over-reaction)
+    follow_threshold_pct: 5.0  # Follow gaps 5-8%
+    entry_delay_minutes: 15    # Wait for dust to settle
+    stop_pct: 3.0
+    target_rr: 1.5
+
+  iv_crush_play:
+    enabled: false             # Requires options — future implementation
+    note: "Sell straddles before earnings to capture IV crush"
+
+# ---------------------------------------------------------------------------
+# Sector rotation configuration
+# ---------------------------------------------------------------------------
+sector_rotation:
+  enabled: true
+  evaluation_frequency: weekly
+  signals:
+    - economic_cycle_phase     # Expansion / Peak / Contraction / Trough
+    - relative_strength        # RS vs SPY over 13 weeks
+    - money_flow               # Institutional buying/selling by sector
+    - earnings_revisions       # Forward EPS revision direction
+
+  cycle_mapping:
+    expansion:
+      overweight: [XLK, XLY, XLI, XLF]
+      underweight: [XLU, XLP, XLRE]
+    peak:
+      overweight: [XLE, XLB, XLI]
+      underweight: [XLK, XLY]
+    contraction:
+      overweight: [XLP, XLV, XLU]
+      underweight: [XLK, XLY, XLF]
+    trough:
+      overweight: [XLF, XLY, XLK]
+      underweight: [XLP, XLU]
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  orb_strategy:
+    enabled: true
+    timeframe: 5m
+    apply_to: [sp500_watchlist, sector_etfs]
+
+  momentum_trend:
+    enabled: true
+    timeframe: 1d
+    rs_period_weeks: 13
+    ema_filter: 200
+    stop_pct: 8.0
+    target_weeks: 6
+    universe: sp500_watchlist
+
+  mean_reversion:
+    enabled: true
+    timeframe: 1d
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    ma_200_filter: true        # Only buy if above 200 MA
+    stop_pct: 5.0
+    target_rr: 2.0
+
+  earnings_drift:
+    enabled: true
+    apply_to: sp500_watchlist
+
+# ---------------------------------------------------------------------------
+# Risk parameters
+# ---------------------------------------------------------------------------
+risk:
+  max_position_pct: 15.0
+  max_open_positions: 10
+  max_market_exposure_pct: 35.0
+  max_sector_concentration_pct: 15.0     # Max in any single sector
+  stop_loss_default_pct: 5.0
+  earnings_position_size_mult: 0.5       # Half-size around earnings
+
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+data:
+  price_source: alpaca
+  fundamentals_source: yfinance
+  earnings_calendar: yfinance
+  sector_weights_update_frequency: monthly
+  candle_history_days: 365

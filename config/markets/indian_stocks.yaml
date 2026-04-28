@@ -1,0 +1,266 @@
+# =============================================================================
+# NEXUS ALPHA — Indian Stocks Market Configuration
+# =============================================================================
+
+market: indian_stocks
+enabled: true
+broker: zerodha
+exchange: NSE           # Primary; BSE as fallback
+
+# ---------------------------------------------------------------------------
+# Market hours (IST = UTC+5:30)
+# ---------------------------------------------------------------------------
+market_hours:
+  tz: Asia/Kolkata
+  pre_open_start: "09:00"
+  pre_open_end: "09:08"
+  session_open: "09:15"
+  session_close: "15:30"
+  post_market_close: "16:00"
+  trading_days: [Monday, Tuesday, Wednesday, Thursday, Friday]
+
+# ---------------------------------------------------------------------------
+# NIFTY 50 constituent stocks
+# ---------------------------------------------------------------------------
+nifty50:
+  index_symbol: NIFTY
+  futures_symbol: NIFTY50
+  lot_size: 50
+  symbols:
+    - ADANIENT
+    - ADANIPORTS
+    - APOLLOHOSP
+    - ASIANPAINT
+    - AXISBANK
+    - BAJAJ-AUTO
+    - BAJFINANCE
+    - BAJAJFINSV
+    - BEL
+    - BPCL
+    - BHARTIARTL
+    - BRITANNIA
+    - CIPLA
+    - COALINDIA
+    - DRREDDY
+    - EICHERMOT
+    - GRASIM
+    - HCLTECH
+    - HDFCBANK
+    - HDFCLIFE
+    - HEROMOTOCO
+    - HINDALCO
+    - HINDUNILVR
+    - ICICIBANK
+    - ITC
+    - INDUSINDBK
+    - INFY
+    - JSWSTEEL
+    - KOTAKBANK
+    - LT
+    - M&M
+    - MARUTI
+    - NESTLEIND
+    - NTPC
+    - ONGC
+    - POWERGRID
+    - RELIANCE
+    - SBILIFE
+    - SHRIRAMFIN
+    - SBIN
+    - SUNPHARMA
+    - TCS
+    - TATACONSUM
+    - TATAMOTORS
+    - TATASTEEL
+    - TECHM
+    - TITAN
+    - TRENT
+    - ULTRACEMCO
+    - WIPRO
+
+# ---------------------------------------------------------------------------
+# BANKNIFTY configuration
+# ---------------------------------------------------------------------------
+banknifty:
+  index_symbol: BANKNIFTY
+  futures_symbol: BANKNIFTY
+  lot_size: 15
+  constituents:
+    - HDFCBANK
+    - ICICIBANK
+    - KOTAKBANK
+    - AXISBANK
+    - SBIN
+    - INDUSINDBK
+    - BANDHANBNK
+    - FEDERALBNK
+    - IDFCFIRSTB
+    - RBLBANK
+    - AUBANK
+    - PNB
+
+  expiry: thursday           # Weekly expiry on Thursdays
+  option_chain_depth: 10     # ITM/OTM strikes to monitor
+
+# ---------------------------------------------------------------------------
+# Futures & Options (F&O) Segment
+# ---------------------------------------------------------------------------
+fo_segment:
+  enabled: true
+  nifty_options:
+    weekly_expiry: thursday
+    monthly_expiry: last_thursday
+    preferred_strikes: 5      # 5 strikes either side of ATM
+    max_delta: 0.35           # Don't buy options with delta > 0.35 (too ITM)
+    min_iv_pct: 15            # Min IV percentile to sell options
+    max_iv_pct: 85            # Max IV percentile to buy options
+
+  index_futures:
+    nifty:
+      lot_size: 50
+      margin_pct: 12
+    banknifty:
+      lot_size: 15
+      margin_pct: 13
+    finnifty:
+      lot_size: 40
+      margin_pct: 12
+
+  stock_futures_watchlist:
+    high_volume:
+      - RELIANCE
+      - HDFCBANK
+      - ICICIBANK
+      - INFY
+      - TCS
+      - SBIN
+      - AXISBANK
+      - BAJFINANCE
+      - LT
+      - TATAMOTORS
+
+# ---------------------------------------------------------------------------
+# Gap trading configuration
+# ---------------------------------------------------------------------------
+gap_trading:
+  enabled: true
+  min_gap_pct: 1.5            # Minimum gap to trade
+  max_gap_pct: 8.0            # Gaps > 8% are too risky
+  fill_probability_threshold: 0.65  # Only trade if historical fill prob > 65%
+  entry_delay_minutes: 5      # Wait 5 min after open before entry
+  stop_beyond_gap_pct: 0.5   # Stop 0.5% beyond gap low/high
+  target_rr: 1.5
+
+  gap_categories:
+    gap_up_fill:              # Gap up → fade back to previous close
+      typical_fill_rate: 0.68
+      best_sectors: [IT, Pharma]
+    gap_down_fill:            # Gap down → bounce back
+      typical_fill_rate: 0.72
+      best_sectors: [FMCG, Private_Banks]
+    continuation_gap:
+      min_volume_mult: 2.0    # Must have 2x normal volume to trust
+
+# ---------------------------------------------------------------------------
+# Expiry day configuration (weekly/monthly options)
+# ---------------------------------------------------------------------------
+expiry_day:
+  enabled: true
+  instruments: [NIFTY, BANKNIFTY, FINNIFTY]
+  strategies:
+    theta_decay:
+      enabled: true
+      sell_straddle_target_expiry_days: 0    # 0DTE straddle
+      entry_time_ist: "09:30"
+      exit_time_ist: "15:15"
+      profit_target_pct: 50                  # 50% of premium received
+      stop_loss_pct: 100                     # 2x premium received
+
+    pin_risk_play:
+      enabled: true
+      pin_zone_pct: 0.15                     # Within 0.15% of strike
+      max_size_lot: 2
+
+  halt_new_trades_before_close_minutes: 30
+
+# ---------------------------------------------------------------------------
+# FII / DII activity thresholds
+# ---------------------------------------------------------------------------
+fii_dii:
+  monitor: true
+  data_source: nsepython
+  fii_buy_threshold_crore: 1000           # FII net buy > 1000 Cr = bullish
+  fii_sell_threshold_crore: -1000         # FII net sell < -1000 Cr = bearish
+  dii_buy_threshold_crore: 500
+  dii_sell_threshold_crore: -500
+  rolling_days: 5                          # Rolling 5-day net activity
+  signal_strength:
+    both_fii_dii_buy: strong_bullish
+    fii_buy_dii_sell: moderate_bullish    # Foreign money coming in
+    fii_sell_dii_buy: neutral              # Domestic support
+    both_fii_dii_sell: strong_bearish
+
+# ---------------------------------------------------------------------------
+# Option chain analysis
+# ---------------------------------------------------------------------------
+option_chain:
+  poll_interval_minutes: 5
+  max_pain_calculation: true
+  pcr_bullish_threshold: 0.70              # Put-Call Ratio < 0.70 = bullish
+  pcr_bearish_threshold: 1.30             # Put-Call Ratio > 1.30 = bearish
+  oi_change_alert_lot_threshold: 1000     # Alert if OI changes > 1000 lots
+  support_resistance_oi_threshold: 50000  # Strike with > 50k OI = S/R level
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  gap_and_go:
+    enabled: true
+    timeframe: 5m
+    gap_min_pct: 1.5
+    volume_confirm_mult: 2.0
+    stop_atr_mult: 1.0
+
+  orb:                        # Opening Range Breakout
+    enabled: true
+    range_minutes: 15          # 09:15–09:30 range
+    breakout_buffer_pct: 0.05
+    stop_beyond_range_pct: 0.10
+    target_rr: 2.0
+    max_trade_time_hours: 3
+
+  index_momentum:
+    enabled: true
+    instruments: [NIFTY, BANKNIFTY]
+    timeframe: 15m
+    ema_fast: 9
+    ema_slow: 21
+    adx_min: 20
+    stop_atr_mult: 1.0
+    target_rr: 1.5
+
+  fii_flow_follow:
+    enabled: true
+    min_signal_strength: moderate_bullish
+    entry_after_minutes: 60   # Wait 1h after data release
+
+# ---------------------------------------------------------------------------
+# Risk parameters
+# ---------------------------------------------------------------------------
+risk:
+  max_position_pct: 15.0
+  max_open_positions: 5
+  max_market_exposure_pct: 30.0
+  max_fo_exposure_pct: 20.0
+  stop_loss_default_pct: 1.5
+  no_trade_days:              # Significant Indian market holidays
+    - Republic_Day            # Jan 26
+    - Holi
+    - Good_Friday
+    - Ambedkar_Jayanti        # Apr 14
+    - Maharashtra_Day         # May 1
+    - Independence_Day        # Aug 15
+    - Gandhi_Jayanti          # Oct 2
+    - Diwali_Laxmi_Pujan
+    - Christmas               # Dec 25

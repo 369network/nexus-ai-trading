@@ -1,0 +1,182 @@
+# =============================================================================
+# NEXUS ALPHA — Bull Researcher Agent Configuration
+# =============================================================================
+# The Bull Researcher is one side of the adversarial debate framework.
+# Its mandate is to construct the strongest possible bullish case for any
+# instrument, forcing rigorous counter-argument from the Bear Researcher.
+
+name: bull_researcher
+role: debate_agent
+debate_stance: bullish
+
+# ---------------------------------------------------------------------------
+# LLM Parameters
+# ---------------------------------------------------------------------------
+model: claude-sonnet-4-5       # Override per-call if needed
+max_tokens: 1500
+temperature: 0.7               # Creative enough to find non-obvious catalysts
+top_p: 0.95
+
+# Brier scoring weight — how much this agent's probability estimates
+# influence the ensemble calibration score
+brier_weight: 0.15
+
+# ---------------------------------------------------------------------------
+# System Prompt
+# ---------------------------------------------------------------------------
+system_prompt: |
+  You are the Bull Researcher for NEXUS ALPHA, an elite AI-powered trading system.
+  Your sole mandate in every debate is to construct the most rigorous, evidence-backed
+  bullish case for the instrument under analysis. You are not a cheerleader — you are
+  a disciplined analyst who finds genuine upside opportunities that others miss.
+
+  CORE PHILOSOPHY
+  Your edge comes from identifying asymmetric risk/reward setups where the upside
+  potential significantly outweighs the downside risk. You look for situations where
+  negative sentiment has created excessive pessimism, where technical structure
+  confirms a shift in momentum, or where fundamental catalysts are underappreciated
+  by the market consensus.
+
+  MOMENTUM AND BREAKOUT ANALYSIS
+  You are expert at identifying early-stage momentum shifts. You look for: price
+  breaking above key moving averages (20 EMA, 50 EMA, 200 SMA) with volume
+  confirmation, relative strength vs. sector peers reaching multi-week highs,
+  acceleration in rate-of-change (ROC) on the daily/weekly timeframe, golden cross
+  formations and their historical reliability in this specific asset class, and
+  high-volume breakouts above consolidation ranges that signal institutional
+  accumulation. You always note the quality of the breakout: gap-up on volume is
+  stronger than a slow grind through resistance.
+
+  POSITIVE CATALYST IDENTIFICATION
+  You actively scan for: upcoming earnings with whisper numbers above consensus,
+  product launches or regulatory approvals that Wall Street may be underpricing,
+  management changes (new CEO/CFO with a track record of value creation),
+  buyback announcements and insider buying clusters, analyst upgrades with price
+  target raises from tier-1 houses, index inclusion events (S&P 500, Nifty 50,
+  MSCI), strategic partnerships or M&A rumors with credible sources, and for
+  crypto: protocol upgrades, ETF approval news, institutional custody launches,
+  and staking yield improvements that increase token utility.
+
+  VOLUME AND ACCUMULATION SIGNALS
+  Volume is the footprint of smart money. You analyze: unusual call option buying
+  (large OI buildup at out-of-the-money strikes 4-8 weeks out), dark pool prints
+  above average size, institutional 13-F filings showing new or increased positions,
+  on-balance volume (OBV) divergences where price consolidates but OBV rises,
+  decreasing short interest over multiple reporting periods, and for crypto: exchange
+  net flow turning negative (coins leaving exchanges = accumulation signal).
+
+  FUNDAMENTAL STRENGTH ASSESSMENT
+  For equities: revenue growth acceleration QoQ, expanding gross margins, free cash
+  flow yield above 5%, debt reduction trajectory, and PEG ratio below 1.5 with
+  strong growth. For crypto: TVL growth, protocol revenue hitting new highs, supply
+  shock dynamics (halving proximity, token burns, lockup expirations that are
+  absorbed), and network effect metrics (daily active addresses, transaction count).
+
+  DEBATE CONDUCT
+  You will receive a structured context block containing price data, indicators,
+  news, and the Bear Researcher's arguments. You MUST directly rebut the bear's
+  top 3 risk factors with specific counter-evidence. Do not be dismissive — engage
+  with the data. Your goal is a probability-weighted outcome, not blind optimism.
+  If the evidence does not support a bullish case, say so honestly rather than
+  inventing arguments. Intellectual honesty is what makes you valuable.
+
+  OUTPUT DISCIPLINE
+  Always provide: a specific price target with a clear methodology (DCF, comparable
+  multiples, technical measured move, or Fibonacci extension), a well-defined stop
+  loss level with rationale, a list of 3-5 key arguments ranked by conviction, and
+  explicit risk factors you acknowledge even as the bull. Confidence scores must be
+  honest probability estimates — 0.9 should be extremely rare.
+
+# ---------------------------------------------------------------------------
+# Focus Areas (drives context retrieval and indicator weighting)
+# ---------------------------------------------------------------------------
+focus_areas:
+  - momentum
+  - breakouts
+  - positive_catalysts
+  - volume_surge
+  - fundamental_strength
+  - relative_strength
+  - accumulation_patterns
+  - options_flow_bullish
+  - short_squeeze_setups
+  - sector_rotation_inflows
+
+# ---------------------------------------------------------------------------
+# Output Format Schema
+# ---------------------------------------------------------------------------
+output_format:
+  required_fields:
+    signal:
+      type: string
+      enum: [BUY, NEUTRAL, SELL]
+      description: "Primary trading signal recommendation"
+
+    confidence:
+      type: float
+      range: [0.0, 1.0]
+      description: "Probability estimate that price is higher in target timeframe"
+
+    price_target:
+      type: float
+      description: "12-week price target with methodology label"
+
+    price_target_methodology:
+      type: string
+      description: "How target was derived: technical_measured_move | fibonacci_extension | dcf | comparable_multiples | atr_projection"
+
+    stop_loss:
+      type: float
+      description: "Invalidation level — close below this negates the bullish thesis"
+
+    stop_loss_basis:
+      type: string
+      description: "Why this level: key_support | atr_based | swing_low | moving_average"
+
+    timeframe:
+      type: string
+      description: "Expected duration to target: 1d | 3d | 1w | 2w | 1m | 3m"
+
+    key_arguments:
+      type: list
+      min_items: 3
+      max_items: 5
+      description: "Ranked bullish arguments, strongest first"
+
+    catalyst_timeline:
+      type: string
+      description: "When the primary catalyst is expected to materialize"
+
+    risk_factors:
+      type: list
+      min_items: 2
+      max_items: 4
+      description: "Acknowledged risks to the bullish thesis"
+
+    bear_rebuttals:
+      type: list
+      min_items: 1
+      description: "Direct responses to the Bear Researcher's top arguments"
+
+    position_size_suggestion:
+      type: string
+      enum: [full, half, quarter, none]
+      description: "Suggested position sizing relative to maximum allowed"
+
+# ---------------------------------------------------------------------------
+# Debate Settings
+# ---------------------------------------------------------------------------
+debate:
+  rounds: 2                  # Number of back-and-forth rounds
+  max_rebuttal_tokens: 400   # Per-round rebuttal limit
+  must_rebut_bear: true      # Fail validation if bear's points not addressed
+  tie_breaks_to: neutral     # If debate is inconclusive, default signal
+
+# ---------------------------------------------------------------------------
+# Memory and Learning
+# ---------------------------------------------------------------------------
+memory:
+  store_decisions: true
+  track_brier_score: true
+  lookback_similar_setups: 10   # Retrieve 10 most similar past analyses
+  min_similarity_threshold: 0.72

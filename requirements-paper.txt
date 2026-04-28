@@ -1,0 +1,68 @@
+# NEXUS ALPHA — Paper Trading Core Requirements
+# Python 3.14 compatible (binary wheels only)
+# Install: pip install --prefer-binary -r requirements-paper.txt
+
+# ── AI / LLM ──────────────────────────────────────────────────────────────
+anthropic>=0.34
+openai>=1.40
+httpx>=0.27
+
+# ── Data Science ────────────────────────────────────────────────────────────
+numpy>=2.2          # 2.x has Python 3.14 wheels
+pandas>=2.2
+scikit-learn>=1.5   # has 3.14 wheels
+
+# ── Exchange Connectors ────────────────────────────────────────────────────
+ccxt>=4.2
+python-binance>=1.0
+yfinance>=0.2.36
+
+# ── Database ──────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]>=2.0
+alembic>=1.13
+asyncpg>=0.29
+supabase>=2.4,<2.26   # 2.26+ pulls pyiceberg which needs MSVC; pin below that
+
+# ── Web / API ─────────────────────────────────────────────────────────────
+fastapi>=0.111
+uvicorn[standard]>=0.29
+websockets>=12.0
+aiohttp>=3.9
+
+# ── Config / Validation ───────────────────────────────────────────────────
+pydantic>=2.6
+pydantic-settings>=2.2
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# ── Auth / Security ───────────────────────────────────────────────────────
+python-jose[cryptography]>=3.3
+pyjwt>=2.8
+cryptography>=42.0
+pyotp>=2.9
+
+# ── Scheduling / Reliability ──────────────────────────────────────────────
+apscheduler>=3.10
+tenacity>=8.2
+
+# ── Logging / Monitoring ─────────────────────────────────────────────────
+structlog>=24.1
+prometheus-client>=0.20
+psutil>=5.9
+redis[asyncio]>=5.0
+
+# ── Alerts ────────────────────────────────────────────────────────────────
+python-telegram-bot>=21.0
+discord-webhook>=1.3
+
+# ── News / Social ─────────────────────────────────────────────────────────
+feedparser>=6.0
+praw>=7.7
+asyncpraw>=7.7
+tweepy>=4.14
+pytrends>=4.9
+python-levenshtein>=0.25
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+pytz>=2024.1
+plotly>=5.22

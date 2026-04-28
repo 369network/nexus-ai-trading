@@ -1,0 +1,219 @@
+# =============================================================================
+# NEXUS ALPHA — Asset Correlation Matrix Configuration
+# =============================================================================
+# Correlations based on historical 1-year rolling data.
+# Values range from -1.0 (perfect inverse) to +1.0 (perfect direct).
+# These are used to: (1) limit concurrent correlated positions,
+# (2) trigger CB5, (3) hedge effectively.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Monitoring settings
+# ---------------------------------------------------------------------------
+monitoring:
+  update_interval_hours: 4      # Recalculate live correlations every 4h
+  lookback_days: 30             # 30-day rolling window for live calculation
+  historical_lookback_days: 365 # For baseline/calibration
+  data_frequency: 1h            # Use 1h candles for calculation
+  min_data_points: 100          # Minimum bars needed for reliable correlation
+
+# ---------------------------------------------------------------------------
+# Alert thresholds
+# ---------------------------------------------------------------------------
+alert_thresholds:
+  high_correlation: 0.80        # Alert if live correlation > 0.80
+  critical_correlation: 0.85   # CB5 trigger threshold
+  regime_change_delta: 0.20    # Alert if correlation changes > 0.20 in 24h
+
+# ---------------------------------------------------------------------------
+# Baseline correlation matrix
+# (Approximate historical values — live values override these)
+# ---------------------------------------------------------------------------
+baseline_correlations:
+
+  # Crypto inter-correlations
+  - pair: [BTC/USDT, ETH/USDT]
+    correlation: 0.85
+    regime: bull_market
+    note: "Highly correlated; treat as near-duplicate exposure"
+
+  - pair: [BTC/USDT, SOL/USDT]
+    correlation: 0.78
+    regime: bull_market
+
+  - pair: [BTC/USDT, ADA/USDT]
+    correlation: 0.72
+    regime: bull_market
+
+  - pair: [ETH/USDT, SOL/USDT]
+    correlation: 0.80
+    regime: bull_market
+
+  - pair: [BTC/USDT, BNB/USDT]
+    correlation: 0.75
+    regime: bull_market
+
+  # Crypto vs macro (risk-on/off)
+  - pair: [BTC/USDT, SPY]
+    correlation: 0.45
+    regime: risk_off
+    note: "Correlation rises sharply in risk-off events"
+
+  - pair: [BTC/USDT, NASDAQ]
+    correlation: 0.55
+    regime: risk_off
+
+  # Gold correlations
+  - pair: [XAU_USD, DXY]
+    correlation: -0.70
+    regime: all
+    note: "Strong inverse correlation with USD index"
+
+  - pair: [XAU_USD, USD/JPY]
+    correlation: -0.60
+    regime: all
+    note: "Both safe-haven assets; often move inversely vs risk"
+
+  - pair: [XAU_USD, WTICO_USD]
+    correlation: 0.40
+    regime: inflation
+    note: "Correlation increases during inflation regimes"
+
+  - pair: [XAU_USD, SPY]
+    correlation: -0.25
+    regime: risk_off
+    note: "Gold gains as equities fall — useful hedge"
+
+  - pair: [XAU_USD, BTC/USDT]
+    correlation: 0.30
+    regime: bull_market
+    note: "Both treated as stores of value; correlation episodic"
+
+  # Silver correlations
+  - pair: [XAG_USD, XAU_USD]
+    correlation: 0.90
+    regime: all
+    note: "Very high — treat silver and gold as correlated exposure"
+
+  - pair: [XAG_USD, DXY]
+    correlation: -0.65
+    regime: all
+
+  # Oil correlations
+  - pair: [WTICO_USD, BCO_USD]
+    correlation: 0.97
+    regime: all
+    note: "Near-perfect; NEVER take opposite positions simultaneously"
+
+  - pair: [WTICO_USD, USD/CAD]
+    correlation: -0.75
+    regime: all
+    note: "CAD is a petrocurrency; CAD strengthens when oil rises"
+
+  - pair: [WTICO_USD, NOK/USD]
+    correlation: 0.70
+    regime: all
+    note: "Norwegian Krone also petrocurrency"
+
+  # Forex correlations
+  - pair: [EUR/USD, GBP/USD]
+    correlation: 0.88
+    regime: all
+    note: "Almost always move together; avoid holding both long/short"
+
+  - pair: [EUR/USD, AUD/USD]
+    correlation: 0.75
+    regime: risk_on
+    note: "AUD follows EUR in risk-on environments"
+
+  - pair: [EUR/USD, NZD/USD]
+    correlation: 0.73
+    regime: risk_on
+
+  - pair: [USD/JPY, USD/CHF]
+    correlation: 0.85
+    regime: all
+    note: "Both JPY and CHF are safe-haven currencies"
+
+  - pair: [AUD/USD, NZD/USD]
+    correlation: 0.92
+    regime: all
+    note: "Extremely correlated; near-duplicate"
+
+  - pair: [EUR/USD, USD/CHF]
+    correlation: -0.90
+    regime: all
+    note: "Inverse: EUR up = USD down = CHF up vs USD"
+
+  # Indian markets
+  - pair: [NIFTY, BANKNIFTY]
+    correlation: 0.92
+    regime: all
+    note: "BANKNIFTY is a sector subset of NIFTY; very high correlation"
+
+  - pair: [NIFTY, SPY]
+    correlation: 0.60
+    regime: risk_off
+    note: "Correlation spikes in global risk-off events"
+
+  - pair: [NIFTY, BTC/USDT]
+    correlation: 0.35
+    regime: risk_off
+
+  # Cross-market macro
+  - pair: [SPY, QQQ]
+    correlation: 0.92
+    regime: all
+    note: "Near-duplicate; prefer one or the other for hedging"
+
+  - pair: [SPY, IWM]
+    correlation: 0.83
+    regime: all
+
+  - pair: [SPY, EUR/USD]
+    correlation: 0.40
+    regime: risk_on
+    note: "Risk-on: USD weakens, stocks rise"
+
+# ---------------------------------------------------------------------------
+# Regime definitions
+# ---------------------------------------------------------------------------
+regimes:
+  risk_on:
+    description: "Bull market, low VIX, strong growth"
+    indicators:
+      - VIX_below: 15
+      - SPY_above_200ma: true
+      - credit_spreads: tight
+
+  risk_off:
+    description: "Bear market, high VIX, flight to safety"
+    indicators:
+      - VIX_above: 25
+      - SPY_below_200ma: true
+      - credit_spreads: wide
+
+  inflation:
+    description: "High inflation regime"
+    indicators:
+      - CPI_yoy_above: 4.0
+      - 10yr_real_yield_below: 0.0
+
+  deflation:
+    description: "Deflationary pressure regime"
+    indicators:
+      - CPI_yoy_below: 1.0
+      - 10yr_yield_falling: true
+
+# ---------------------------------------------------------------------------
+# Correlation-based position limits
+# ---------------------------------------------------------------------------
+position_rules:
+  max_correlated_positions:
+    threshold: 0.80             # If correlation > 0.80
+    max_positions: 2            # Max 2 positions in same correlated group
+
+  inverse_correlation_hedge:
+    enable: true
+    hedge_ratio: 0.30           # Hedge 30% of correlated exposure
+    min_negative_correlation: -0.60

@@ -1,0 +1,195 @@
+# =============================================================================
+# NEXUS ALPHA — Commodities Market Configuration
+# =============================================================================
+
+market: commodities
+enabled: true
+broker: oanda           # Primary; IBKR as fallback for futures
+
+# ---------------------------------------------------------------------------
+# Instruments
+# ---------------------------------------------------------------------------
+instruments:
+  XAU_USD:
+    name: Gold Spot
+    oanda_instrument: XAU_USD
+    ibkr_symbol: XAUUSD
+    ccxt_symbol: XAU/USD
+    asset_class: precious_metals
+    quote_currency: USD
+    lot_size: 1              # 1 troy oz per unit
+    pip_size: 0.01
+    typical_spread_usd: 0.30
+    max_spread_usd: 1.00
+    margin_pct: 3.3
+    trading_hours_utc:
+      open: "22:00"          # Sunday 10 PM UTC
+      close: "21:00"         # Friday 9 PM UTC (nearly 24/5)
+    tick_value_usd: 0.01     # $0.01 per oz per pip
+
+  XAG_USD:
+    name: Silver Spot
+    oanda_instrument: XAG_USD
+    ibkr_symbol: XAGUSD
+    asset_class: precious_metals
+    quote_currency: USD
+    lot_size: 50             # 50 troy oz per unit
+    pip_size: 0.001
+    typical_spread_usd: 0.02
+    max_spread_usd: 0.10
+    margin_pct: 5.0
+    trading_hours_utc:
+      open: "22:00"
+      close: "21:00"
+
+  WTICO_USD:
+    name: WTI Crude Oil
+    oanda_instrument: WTICO_USD
+    ibkr_symbol: CL
+    asset_class: energy
+    quote_currency: USD
+    lot_size: 100            # 100 barrels per unit (CFD)
+    pip_size: 0.001
+    typical_spread_usd: 0.03
+    max_spread_usd: 0.20
+    margin_pct: 5.0
+    trading_hours_utc:
+      open: "23:00"          # Sunday 11 PM UTC
+      close: "22:00"         # Friday 10 PM UTC
+
+  BCO_USD:
+    name: Brent Crude Oil
+    oanda_instrument: BCO_USD
+    ibkr_symbol: BZ
+    asset_class: energy
+    quote_currency: USD
+    lot_size: 100
+    pip_size: 0.001
+    typical_spread_usd: 0.03
+    max_spread_usd: 0.20
+    margin_pct: 5.0
+    trading_hours_utc:
+      open: "23:00"
+      close: "22:00"
+
+# ---------------------------------------------------------------------------
+# Gold-specific configuration
+# ---------------------------------------------------------------------------
+gold:
+  seasonal_patterns:
+    # Historical tendency (not guaranteed)
+    strong_months: [1, 2, 8, 9, 10, 11]    # Jan, Feb, Aug-Nov
+    weak_months: [3, 4, 5, 6]              # Mar-Jun
+    year_end_drift: true                    # Tend to rally into year-end
+
+  key_drivers:
+    - DXY_correlation: -0.70               # Inverse USD correlation
+    - real_yields_correlation: -0.85       # Inverse real yield correlation
+    - geopolitical_risk: positive
+    - inflation_expectations: positive
+    - central_bank_buying: positive
+
+  support_resistance:
+    psychological_levels:                  # Round numbers act as S/R
+      step: 100
+    update_interval_days: 7
+
+  gold_silver_ratio:
+    current_historical_avg: 80            # Historical mean ~80
+    high_threshold: 90                    # Ratio > 90 → silver cheap vs gold
+    low_threshold: 65                     # Ratio < 65 → gold cheap vs silver
+    mean_reversion_trade: true
+    spread_instrument_pair: [XAU_USD, XAG_USD]
+
+# ---------------------------------------------------------------------------
+# Oil-specific configuration
+# ---------------------------------------------------------------------------
+oil:
+  eia_report:
+    day_of_week: wednesday
+    time_utc: "14:30"                      # 10:30 AM ET = 14:30 UTC
+    pre_report_halt_minutes: 30
+    post_report_volatility_window_minutes: 60
+    typical_move_usd: 1.50                 # Average move on report
+
+  opec_events:
+    halt_before_minutes: 60
+    halt_after_minutes: 120
+
+  wti_brent_spread:
+    monitor: true
+    typical_spread_usd: 2.0               # WTI usually ~$2 below Brent
+    spread_alert_deviation_usd: 3.0       # Alert if spread diverges
+
+  key_drivers:
+    - OPEC_production_cuts
+    - EIA_inventory_change
+    - Geopolitical_risk_premium
+    - USD_strength_inverse
+    - Seasonal_demand_summer
+
+  seasonal:
+    driving_season: [5, 6, 7, 8]          # May–Aug demand pickup
+    winter_heating: [10, 11, 12, 1]       # Oct–Jan
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  trend_follow:
+    enabled: true
+    timeframe: 4h
+    ema_fast: 21
+    ema_slow: 55
+    atr_period: 14
+    stop_atr_mult: 1.5
+    target_rr: 2.5
+    instruments: [XAU_USD, WTICO_USD, BCO_USD]
+
+  mean_reversion:
+    enabled: true
+    timeframe: 1h
+    bb_period: 20
+    bb_std: 2.0
+    rsi_oversold: 25
+    rsi_overbought: 75
+    instruments: [XAU_USD, XAG_USD]
+
+  news_catalyst:
+    enabled: true
+    instruments: [WTICO_USD, BCO_USD]
+    catalysts:
+      - EIA_inventory
+      - OPEC_meeting
+      - OPEC_plus_decision
+    halt_active: true                      # Halt trading before catalyst
+
+  gold_silver_ratio:
+    enabled: true
+    ratio_high_threshold: 90
+    ratio_low_threshold: 65
+    position_sizing_equal_dollar: true
+    max_holding_days: 30
+
+# ---------------------------------------------------------------------------
+# Risk Parameters
+# ---------------------------------------------------------------------------
+risk:
+  max_position_pct: 8.0
+  max_open_positions: 4
+  max_market_exposure_pct: 20.0
+  max_energy_exposure_pct: 12.0
+  max_metals_exposure_pct: 12.0
+  stop_loss_default_atr_mult: 1.5
+  max_slippage_pct: 0.20                   # Commodities can gap more
+
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+data:
+  price_source: oanda
+  fundamentals:
+    eia_inventory_url: "https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx"
+    gold_forward_rates: "https://www.lbma.org.uk/prices-and-data/precious-metal-prices"
+    opec_reports: "https://www.opec.org/opec_web/en/publications/338.htm"
+  candle_history_days: 730

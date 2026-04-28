@@ -1,0 +1,139 @@
+version: "3.9"
+
+# =============================================================================
+# NEXUS ALPHA — Development Overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+
+services:
+  nexus-bot:
+    build:
+      target: development
+    command: ["python", "-m", "watchfiles", "python src/main.py", "src/", "config/"]
+    environment:
+      - ENVIRONMENT=paper
+      - PAPER_MODE=true
+      - LOG_LEVEL=DEBUG
+      - PYTHONASYNCIODEBUG=1
+    volumes:
+      - ./src:/app/src:rw               # Hot reload source changes
+      - ./config:/app/config:rw         # Editable configs
+      - ./tests:/app/tests:rw
+      - ./scripts:/app/scripts:rw
+    ports:
+      - "8080:8080"
+      - "5678:5678"                      # debugpy remote debugger port
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  nexus-data:
+    build:
+      target: development
+    command: ["python", "-m", "watchfiles", "python src/data/collector.py", "src/"]
+    environment:
+      - ENVIRONMENT=paper
+      - PAPER_MODE=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./src:/app/src:rw
+      - ./config:/app/config:rw
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  redis:
+    ports:
+      - "6379:6379"                      # Expose Redis port for local tooling
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  prometheus:
+    ports:
+      - "9090:9090"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  grafana:
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=dev_password
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    ports:
+      - "3001:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Local Supabase (via supabase CLI image)
+  # ---------------------------------------------------------------------------
+  supabase-db:
+    image: supabase/postgres:15.1.1.78
+    container_name: nexus-supabase-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+    volumes:
+      - ./scripts/setup_supabase.sql:/docker-entrypoint-initdb.d/00_setup.sql:ro
+      - supabase-db-data:/var/lib/postgresql/data
+    networks:
+      - nexus-net
+    ports:
+      - "54322:5432"                     # Different port to not conflict with local PG
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  supabase-studio:
+    image: supabase/studio:20240101-8e4a94c
+    container_name: nexus-supabase-studio
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: http://localhost:8000
+      STUDIO_PG_META_URL: http://supabase-db:5432
+      POSTGRES_PASSWORD: postgres
+      DEFAULT_ORGANIZATION: nexus-dev
+      DEFAULT_PROJECT: nexus-alpha
+    networks:
+      - nexus-net
+    ports:
+      - "54323:3000"
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Mailhog (catches all test emails in dev)
+  # ---------------------------------------------------------------------------
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: nexus-mailhog
+    restart: unless-stopped
+    networks:
+      - nexus-net
+    ports:
+      - "8025:8025"                      # Web UI
+      - "1025:1025"                      # SMTP
+
+volumes:
+  supabase-db-data:

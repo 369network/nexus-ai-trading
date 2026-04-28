@@ -1,0 +1,133 @@
+# =============================================================================
+# NEXUS ALPHA — Risk Limits Configuration
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Portfolio-level limits
+# ---------------------------------------------------------------------------
+portfolio:
+  total_exposure_pct: 80.0        # Never deploy > 80% of capital
+  max_open_positions: 20          # Across all markets
+  daily_stop_loss_pct: 15.0       # Halt all trading if daily loss hits 15%
+  weekly_stop_loss_pct: 20.0      # Halt week if weekly loss hits 20%
+  monthly_stop_loss_pct: 25.0
+
+  drawdown_thresholds:
+    warning: 10.0                  # Log warning + increase monitoring
+    reduce_size: 15.0              # Reduce all new position sizes by 25%
+    pause_trading: 20.0            # Pause new entries; manage exits only
+    emergency_review: 30.0        # Page on-call; manual review required
+    emergency_shutdown: 40.0      # Close all positions; halt system
+
+  capital_at_risk_pct: 2.0        # Default risk per trade as % of capital
+  max_capital_at_risk_pct: 3.0    # Hard cap per trade
+
+# ---------------------------------------------------------------------------
+# Per-market exposure limits
+# ---------------------------------------------------------------------------
+markets:
+  crypto:
+    max_position_pct: 10.0        # Max 10% per single position
+    max_market_exposure_pct: 40.0 # Max 40% of portfolio in crypto total
+    max_open_positions: 8
+    max_leverage: 3.0             # Never exceed 3x for crypto
+    min_liquidity_usd_24h: 500_000
+
+  forex:
+    max_position_pct: 5.0
+    max_market_exposure_pct: 25.0
+    max_open_positions: 6
+    max_leverage: 10.0            # Forex allows higher leverage but cap at 10x
+    max_correlated_pairs: 2       # Max 2 highly correlated pairs open
+
+  commodities:
+    max_position_pct: 8.0
+    max_market_exposure_pct: 20.0
+    max_open_positions: 4
+    max_leverage: 5.0
+    max_energy_pct: 12.0          # Sub-limit for energy only
+    max_metals_pct: 12.0          # Sub-limit for metals only
+
+  indian_stocks:
+    max_position_pct: 15.0
+    max_market_exposure_pct: 30.0
+    max_open_positions: 5
+    max_leverage: 1.0             # No leverage for stocks (CNC only)
+    max_fo_exposure_pct: 20.0     # F&O segment sub-limit
+    max_sector_concentration_pct: 20.0
+
+  us_stocks:
+    max_position_pct: 15.0
+    max_market_exposure_pct: 35.0
+    max_open_positions: 10
+    max_leverage: 1.0             # No leverage for stocks
+    max_sector_concentration_pct: 15.0
+    earnings_size_multiplier: 0.5 # Half size around earnings
+
+# ---------------------------------------------------------------------------
+# Position sizing rules
+# ---------------------------------------------------------------------------
+position_sizing:
+  method: atr_based              # atr_based | fixed_pct | kelly
+  atr_period: 14
+  default_atr_risk_mult: 1.5     # Stop = 1.5x ATR from entry
+  risk_per_trade_pct: 1.0        # Risk 1% of portfolio per trade by default
+  kelly_fraction: 0.25           # Use quarter-Kelly when Kelly method active
+  max_position_usd: null         # No hard USD cap (use % instead)
+
+  scaling:
+    enable_pyramiding: false     # No adding to winners (conservative)
+    scale_in_tranches: 1         # Enter in 1 tranche
+    scale_out_tranches: 2        # Exit in 2 tranches (half at T1, rest at T2)
+
+# ---------------------------------------------------------------------------
+# Stop-loss rules
+# ---------------------------------------------------------------------------
+stops:
+  always_required: true          # Every position must have a stop
+  stop_types:
+    - hard_stop                  # Always active
+    - trailing_stop              # Optional per strategy
+    - time_stop                  # Close if not moving after N hours
+
+  trailing_stop_defaults:
+    crypto: 1.5                  # 1.5% trailing
+    forex: 20                    # 20 pips trailing
+    commodities: 1.0             # 1.0% trailing
+    stocks: 3.0                  # 3.0% trailing
+
+  time_stops:
+    crypto_max_hold_hours: 48
+    forex_max_hold_hours: 72
+    commodities_max_hold_hours: 120
+    stocks_max_hold_days: 20
+
+# ---------------------------------------------------------------------------
+# Slippage and execution limits
+# ---------------------------------------------------------------------------
+execution:
+  max_slippage_pct:
+    crypto: 0.15
+    forex: 0.05                  # ~0.5 pips on majors
+    commodities: 0.20
+    stocks: 0.10
+  reject_if_spread_gt_normal_mult: 3.0  # Reject if spread > 3x normal
+  min_fill_quality: 0.95         # At least 95% of order filled (vs VWAP)
+
+# ---------------------------------------------------------------------------
+# Correlation limits
+# ---------------------------------------------------------------------------
+correlation:
+  max_cross_market_correlation: 0.85
+  max_same_market_correlation: 0.70
+  lookback_days: 20
+  reduction_on_breach_pct: 50.0  # Reduce combined exposure by 50%
+
+# ---------------------------------------------------------------------------
+# LLM cost guardrails
+# ---------------------------------------------------------------------------
+llm_costs:
+  max_daily_usd: 10.0
+  alert_at_pct: 80.0             # Alert when 80% of budget used
+  halt_at_pct: 100.0             # Stop all LLM calls at 100%
+  per_decision_max_usd: 0.50    # Single decision must cost < $0.50
