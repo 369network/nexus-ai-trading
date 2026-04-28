@@ -762,6 +762,19 @@ class NexusAlpha:
                         METRICS.open_positions.set(num_open)
                         METRICS.current_drawdown_pct.set(drawdown_pct)
 
+                        # Telegram drawdown alert at 5% threshold
+                        _last_dd = getattr(self, "_last_dd_alert_pct", 0.0)
+                        if drawdown_pct <= -5.0 and drawdown_pct < _last_dd - 1.0:
+                            self._last_dd_alert_pct = drawdown_pct
+                            try:
+                                if self.alert_manager:
+                                    await self.alert_manager.notify_warning(
+                                        f"Drawdown alert: {drawdown_pct:.1f}% | "
+                                        f"Equity: ${equity:,.2f}"
+                                    )
+                            except Exception:
+                                pass
+
                         # Also push open positions list to health server
                         try:
                             raw_positions = getattr(state, "positions", None) or []
@@ -792,6 +805,15 @@ class NexusAlpha:
             "EMERGENCY STOP activated via /control/emergency-stop — halting bot immediately."
         )
         self._running = False  # noqa: used by any future polling guard
+        # Notify via Telegram before halting
+        try:
+            if self.alert_manager:
+                await self.alert_manager.notify_critical(
+                    "EMERGENCY STOP triggered via /control/emergency-stop API. "
+                    "All positions closed. Bot halted immediately."
+                )
+        except Exception:
+            pass
         await self.stop()
 
     # ------------------------------------------------------------------
