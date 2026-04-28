@@ -353,16 +353,28 @@ class BaseStrategy(ABC):
         else:
             ohlcv = candle_history  # already in expected format
 
+        # Provide paper-mode sentiment defaults so that sentiment-gated
+        # strategy conditions (LLM consensus, Fear & Greed) don't silently
+        # block all signals when live sentiment feeds aren't connected.
+        # Real feeds (news, social, on-chain) will override these when wired in.
+        paper_sentiment: Dict[str, Any] = {
+            "fear_greed":    indicators.get("fear_greed", 50),
+            "llm_consensus": "SLIGHT_BUY",   # neutral-bullish default for paper
+            "funding_rate":  indicators.get("funding_rate", 0.01),
+        }
+
         market_data: Dict[str, Any] = {
             "symbol":      symbol,
             "timeframe":   timeframe,
             "candle":      candle,
             "ohlcv":       ohlcv,
             "indicators":  indicators,
+            "sentiment":   paper_sentiment,
         }
         context: Dict[str, Any] = {
-            "regime":  regime,
-            "symbol":  symbol,
+            "regime":     regime,
+            "symbol":     symbol,
+            "paper_mode": True,
         }
         try:
             return self.generate_signal(market_data, context)

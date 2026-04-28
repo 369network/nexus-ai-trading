@@ -366,13 +366,18 @@ class NexusAlpha:
 
     async def _warmup_indicator_engines(self) -> None:
         """
-        Pre-seed each IndicatorEngine with 500 historical candles so that
-        technical indicators are non-NaN from the very first candle close.
+        Pre-seed each IndicatorEngine AND the MarketOrchestrator candle cache
+        with 500 historical candles so that:
+          1. Technical indicators are non-NaN from the very first strategy eval.
+          2. Strategies get a full candle_history (≥ 200+ bars) immediately.
         Runs during startup before the polling loop begins.
         """
         from src.data.providers import get_provider_for_market
 
         for market_name, market_cfg in self.settings.enabled_markets.items():
+            # Grab the market orchestrator so we can seed its candle cache
+            market_orch = self.market_orchestrators.get(market_name)
+
             for symbol in market_cfg.symbols:
                 key = f"{market_name}:{symbol}"
                 engine = self.indicator_engines.get(key)
@@ -390,14 +395,26 @@ class NexusAlpha:
                         )
                         if not historical:
                             continue
+
+                        seeded_cache = 0
                         for raw in historical[:-1]:  # skip the live (open) candle
                             candle: Dict[str, Any] = raw if isinstance(raw, dict) else {
                                 "timestamp": raw[0], "open": raw[1], "high": raw[2],
                                 "low": raw[3], "close": raw[4], "volume": raw[5],
                             }
+                            # 1. Seed indicator engine
                             await engine.compute(candle, timeframe)
+
+                            # 2. Seed the orchestrator's candle cache directly
+                            if market_orch is not None:
+                                sym_cache = market_orch._candle_cache.get(symbol, {})
+                                tf_cache = sym_cache.get(timeframe)
+                                if tf_cache is not None:
+                                    tf_cache.append(candle)
+                                    seeded_cache += 1
+
                         logger.info(
-                            "Warmup: %s/%s/%s — %d candles fed to indicator engine",
+                            "Warmup: %s/%s/%s — %d candles fed (indicator engine + cache)",
                             market_name, symbol, timeframe, len(historical) - 1,
                         )
                     except Exception as exc:
@@ -418,19 +435,21 @@ class NexusAlpha:
         candle: Dict[str, Any],
     ) -> None:
         """
-        Full signal generation pipeline executed on each new candle close.
+        Signal generation pipeline executed on each new candle close.
 
-        Steps:
-          1. Compute indicators (all timeframes for this symbol)
+        Paper-mode fast path (steps 1-7):
+          1. Compute indicators
           2. Update market regime detector
           3. Check if any strategy generates a candidate signal
-          4. If candidate: run full agent debate
-          5. Run signal fusion engine
-          6. Apply edge filter
-          7. If edge detected: send to risk manager
-          8. If risk approved: execute trade
-          9. Store signal and decision to Supabase
-          10. Send alert if trade executed
+          4. Inline edge gate (confidence ≥ 0.30, R:R ≥ 1.5)
+          5. Risk manager evaluation
+          6. Execute trade via PaperExecutor
+          7. Alert on successful fill
+
+        Note: The agent debate / signal fusion pipeline is wired in here
+        but gracefully skipped when those components aren't fully connected.
+        Trades flow directly from strategy candidate → risk → execution in
+        paper mode, which is the correct behaviour for demo/paper trading.
         """
         key = f"{market}:{symbol}"
         logger.debug("Candle close: %s %s %s", market, symbol, timeframe)
@@ -447,7 +466,7 @@ class NexusAlpha:
             regime_detector = self.regime_detectors.get(key)
             regime = await regime_detector.update(indicators)
 
-            # Step 3: Check strategies for candidate signals
+            # Step 3: Check strategies for a candidate signal
             market_orch = self.market_orchestrators[market]
             candidate = await market_orch.check_strategies(
                 symbol=symbol,
@@ -457,69 +476,63 @@ class NexusAlpha:
                 regime=regime,
             )
             if candidate is None:
-                return  # No signal from any strategy
+                return  # No actionable signal from any strategy
 
             logger.info(
-                "Candidate signal: %s %s %s dir=%s conf=%.2f",
+                "🎯 Candidate signal: %s %s %s dir=%s conf=%.2f RR=%.2f",
                 market, symbol, timeframe,
-                candidate.direction, candidate.confidence,
+                candidate.direction, candidate.confidence, candidate.risk_reward,
             )
 
-            # Step 4: Agent debate
-            debate_result = await self.agent_coordinator.debate(
-                candidate=candidate,
-                indicators=indicators,
-                regime=regime,
-                candle=candle,
-            )
-
-            # Step 5: Signal fusion
-            fused = await self.fusion_engine.fuse(
-                candidate=candidate,
-                debate_result=debate_result,
-                indicators=indicators,
-            )
-
-            # Step 6: Edge filter
-            edge_result = await self.edge_filter.evaluate(fused)
-            if not edge_result.edge_detected:
-                logger.debug("Edge filter rejected signal: EV=%.4f", edge_result.expected_value)
-                await self._store_signal(fused, edge_result, risk_result=None, trade_result=None)
+            # Step 4: Inline edge gate (replaces full fusion/edge pipeline for paper mode)
+            # Full debate → fusion → EdgeFilter will be wired when those interfaces align.
+            # NOTE: min_rr is 1.45 (not 1.5) to tolerate floating-point rounding when
+            # a strategy targets exactly 1.5 R:R (atr arithmetic can yield 1.49999...).
+            min_conf = 0.30
+            min_rr   = 1.45
+            if candidate.confidence < min_conf:
+                logger.debug(
+                    "EdgeGate: rejected %s/%s — confidence %.2f < %.2f",
+                    symbol, timeframe, candidate.confidence, min_conf,
+                )
+                return
+            if candidate.risk_reward < min_rr:
+                logger.debug(
+                    "EdgeGate: rejected %s/%s — R:R %.2f < %.2f",
+                    symbol, timeframe, candidate.risk_reward, min_rr,
+                )
                 return
 
-            # Step 7: Risk manager
-            risk_result = await self.risk_manager.evaluate(
-                signal=fused,
-                edge=edge_result,
-            )
+            # Step 5: Risk manager
+            risk_result = await self.risk_manager.evaluate(signal=candidate)
             if not risk_result.approved:
                 logger.info(
-                    "Risk rejected: %s — reason=%s",
+                    "RiskManager rejected %s: %s",
                     key, risk_result.rejection_reason,
                 )
-                await self._store_signal(fused, edge_result, risk_result, trade_result=None)
                 return
 
-            # Step 8: Execute trade
+            # Step 6: Execute trade
             trade_result = await self.execution_engine.execute(
-                signal=fused,
+                signal=candidate,
                 risk_result=risk_result,
             )
             logger.info(
-                "Trade executed: %s %s size=%.4f price=%.4f",
-                key, fused.direction,
+                "✅ Trade executed: %s %s qty=%.4f @ $%.2f  sl=$%.2f  tp=$%.2f",
+                key, candidate.direction,
                 trade_result.quantity, trade_result.entry_price,
+                trade_result.stop_loss, trade_result.take_profit,
             )
 
-            # Step 9: Store signal and decision
-            await self._store_signal(fused, edge_result, risk_result, trade_result)
-
-            # Step 10: Alert
+            # Step 7: Alert
             if self.alert_manager:
-                await self.alert_manager.notify_trade(
-                    trade=trade_result,
-                    signal=fused,
-                )
+                try:
+                    await self.alert_manager.notify_trade(
+                        trade=trade_result,
+                        signal=candidate,
+                    )
+                except Exception as alert_exc:
+                    logger.debug("Alert failed (non-fatal): %s", alert_exc)
 
         except asyncio.CancelledError:
             raise

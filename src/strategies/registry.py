@@ -21,10 +21,16 @@ class StrategyRegistry:
         market = market.lower()
         strategies: List[Any] = []
 
+        paper_mode = getattr(settings, "paper_mode", True)
+
         strategy_modules = {
             "crypto": [
                 ("src.strategies.crypto.momentum",      "CryptoMomentumStrategy"),
                 ("src.strategies.crypto.mean_reversion","CryptoMeanReversionStrategy"),
+                # Paper-mode trend strategy: fires under normal market conditions
+                # to exercise the full trade pipeline (exec, fees, slippage, DB).
+                *([("src.strategies.crypto.paper_trend", "CryptoPaperTrendStrategy")]
+                  if paper_mode else []),
             ],
             "forex": [
                 ("src.strategies.forex.breakout", "BreakoutStrategy"),
