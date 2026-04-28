@@ -1,0 +1,734 @@
+"""
+NEXUS ALPHA - Main Orchestrator
+Production-grade algorithmic trading bot entry point.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import signal
+import sys
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set
+
+# ---------------------------------------------------------------------------
+# Logging setup (must happen before any local imports)
+# ---------------------------------------------------------------------------
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("nexus_alpha.main")
+
+
+# ---------------------------------------------------------------------------
+# Local imports (lazy where possible to speed startup)
+# ---------------------------------------------------------------------------
+from src.config.settings import Settings, load_settings
+from src.data.market_orchestrator import MarketOrchestrator
+from src.data.candle_store import CandleStore
+from src.indicators.engine import IndicatorEngine
+from src.strategies.regime import MarketRegimeDetector
+from src.strategies.signal_fusion import SignalFusionEngine
+from src.strategies.edge_filter import EdgeFilter
+from src.agents.coordinator import AgentCoordinator
+from src.llm.ensemble import LLMEnsemble
+from src.risk.manager import RiskManager
+from src.execution.engine import ExecutionEngine
+from src.execution.paper import PaperExecutor
+from src.execution.live import LiveExecutor
+from src.alerts.manager import AlertManager
+from src.db.supabase_client import SupabaseClient
+from src.learning.dream_mode import DreamModeScheduler
+from src.learning.memory import MemoryUpdater
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+HEALTH_CHECK_INTERVAL_SECONDS = 60
+MAX_RESTARTS = 3
+RESTART_WINDOW_SECONDS = 300
+WATCHDOG_INTERVAL_SECONDS = 30
+
+
+# ---------------------------------------------------------------------------
+# Component restart tracker
+# ---------------------------------------------------------------------------
+@dataclass
+class RestartRecord:
+    timestamps: List[float] = field(default_factory=list)
+
+    def record(self) -> None:
+        now = time.monotonic()
+        self.timestamps.append(now)
+        # Prune records outside the window
+        self.timestamps = [
+            t for t in self.timestamps if now - t <= RESTART_WINDOW_SECONDS
+        ]
+
+    def count_recent(self) -> int:
+        now = time.monotonic()
+        return sum(
+            1 for t in self.timestamps if now - t <= RESTART_WINDOW_SECONDS
+        )
+
+
+# ---------------------------------------------------------------------------
+# Health snapshot
+# ---------------------------------------------------------------------------
+@dataclass
+class ComponentHealth:
+    name: str
+    healthy: bool
+    last_checked: datetime
+    error: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# NexusAlpha - Main Orchestrator Class
+# ---------------------------------------------------------------------------
+class NexusAlpha:
+    """
+    Central orchestrator that initialises, starts, and manages all subsystems
+    of the NEXUS ALPHA trading platform.
+    """
+
+    def __init__(self) -> None:
+        self.settings: Optional[Settings] = None
+        self.db: Optional[SupabaseClient] = None
+        self.alert_manager: Optional[AlertManager] = None
+        self.llm_ensemble: Optional[LLMEnsemble] = None
+        self.agent_coordinator: Optional[AgentCoordinator] = None
+        self.risk_manager: Optional[RiskManager] = None
+        self.execution_engine: Optional[ExecutionEngine] = None
+        self.dream_scheduler: Optional[DreamModeScheduler] = None
+        self.memory_updater: Optional[MemoryUpdater] = None
+
+        # One MarketOrchestrator per enabled market
+        self.market_orchestrators: Dict[str, MarketOrchestrator] = {}
+
+        # Signal generation engines per market/symbol
+        self.indicator_engines: Dict[str, IndicatorEngine] = {}
+        self.regime_detectors: Dict[str, MarketRegimeDetector] = {}
+        self.fusion_engine: Optional[SignalFusionEngine] = None
+        self.edge_filter: Optional[EdgeFilter] = None
+
+        # Shutdown coordination
+        self._shutdown_event: asyncio.Event = asyncio.Event()
+        self._restart_records: Dict[str, RestartRecord] = defaultdict(RestartRecord)
+
+        # Component health registry
+        self._component_health: Dict[str, ComponentHealth] = {}
+
+        # Background tasks tracker
+        self._tasks: Set[asyncio.Task] = set()
+
+    # ------------------------------------------------------------------
+    # Public Interface
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Full startup sequence then block until shutdown."""
+        logger.info("=== NEXUS ALPHA starting up ===")
+
+        try:
+            await self._startup_sequence()
+            logger.info("=== NEXUS ALPHA fully operational ===")
+            await self._run()
+        except Exception as exc:
+            logger.critical("Fatal error during startup: %s", exc, exc_info=True)
+            await self.stop()
+            raise
+        finally:
+            logger.info("=== NEXUS ALPHA shutdown complete ===")
+
+    async def stop(self) -> None:
+        """Graceful shutdown of all components."""
+        logger.info("Initiating graceful shutdown…")
+        self._shutdown_event.set()
+
+        # Cancel all background tasks
+        for task in list(self._tasks):
+            if not task.done():
+                task.cancel()
+
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        # Shutdown subsystems in reverse order
+        if self.execution_engine:
+            await self.execution_engine.shutdown()
+        if self.dream_scheduler:
+            await self.dream_scheduler.stop()
+        if self.memory_updater:
+            await self.memory_updater.stop()
+        for orch in self.market_orchestrators.values():
+            await orch.stop()
+        if self.db:
+            await self.db.close()
+
+        logger.info("All components stopped.")
+
+    # ------------------------------------------------------------------
+    # Startup Sequence
+    # ------------------------------------------------------------------
+
+    async def _startup_sequence(self) -> None:
+        """Execute the 14-step startup sequence."""
+
+        # Step 1: Load configuration
+        logger.info("[1/14] Loading configuration…")
+        self.settings = await load_settings()
+        logger.info(
+            "Config loaded: paper_mode=%s, markets=%s",
+            self.settings.paper_mode,
+            list(self.settings.enabled_markets.keys()),
+        )
+
+        # Step 2: Connect to Supabase
+        logger.info("[2/14] Connecting to Supabase…")
+        self.db = SupabaseClient(
+            url=self.settings.supabase_url,
+            key=self.settings.supabase_service_key,
+        )
+        await self.db.connect()
+        logger.info("Supabase connected.")
+
+        # Step 3: Initialise data providers
+        logger.info("[3/14] Initialising data providers…")
+        for market_name, market_cfg in self.settings.enabled_markets.items():
+            orch = MarketOrchestrator(
+                market_name=market_name,
+                config=market_cfg,
+                settings=self.settings,
+                db=self.db,
+                on_candle_close=self._on_candle_close,
+            )
+            await orch.init_providers()
+            self.market_orchestrators[market_name] = orch
+            logger.info("  Data provider ready: %s", market_name)
+
+        # Step 4: Start WebSocket connections
+        logger.info("[4/14] Starting WebSocket connections…")
+        for market_name, orch in self.market_orchestrators.items():
+            await orch.connect_websockets()
+            logger.info("  WebSocket live: %s", market_name)
+
+        # Step 5: Initialise LLM ensemble
+        logger.info("[5/14] Initialising LLM ensemble…")
+        self.llm_ensemble = LLMEnsemble.from_settings(settings=self.settings, db=self.db)
+        await self.llm_ensemble.init()
+        logger.info("LLM ensemble ready: %d models", len(self.llm_ensemble.models))
+
+        # Step 6: Initialise all 7 agents
+        logger.info("[6/14] Initialising agent coordinator (7 agents)…")
+        self.agent_coordinator = AgentCoordinator(
+            settings=self.settings,
+            llm_ensemble=self.llm_ensemble,
+            db=self.db,
+        )
+        await self.agent_coordinator.init()
+        logger.info("Agent coordinator ready.")
+
+        # Step 7: Initialise risk management
+        logger.info("[7/14] Initialising risk management system…")
+        self.risk_manager = RiskManager(settings=self.settings, db=self.db)
+        await self.risk_manager.init()
+        logger.info("Risk manager ready.")
+
+        # Step 8: Initialise execution engine
+        logger.info("[8/14] Initialising execution engine (paper=%s)…", self.settings.paper_mode)
+        if self.settings.paper_mode:
+            executor = PaperExecutor(settings=self.settings, db=self.db)
+        else:
+            executor = LiveExecutor(settings=self.settings, db=self.db)
+        await executor.init()
+        self.execution_engine = ExecutionEngine(executor=executor, settings=self.settings, db=self.db)
+        logger.info("Execution engine ready.")
+
+        # Step 9-11: Signal generation components
+        logger.info("[9/14] Initialising signal generation components…")
+        self.fusion_engine = SignalFusionEngine()   # uses default config
+        self.edge_filter = EdgeFilter()             # uses default thresholds
+        for market_name, market_cfg in self.settings.enabled_markets.items():
+            for symbol in market_cfg.symbols:
+                key = f"{market_name}:{symbol}"
+                self.indicator_engines[key] = IndicatorEngine(
+                    symbol=symbol, market=market_name, settings=self.settings
+                )
+                self.regime_detectors[key] = MarketRegimeDetector(
+                    symbol=symbol, settings=self.settings
+                )
+        logger.info("Signal generation components ready.")
+
+        # Step 10: Initialise learning system
+        logger.info("[10/14] Initialising learning system…")
+        self.dream_scheduler = DreamModeScheduler(
+            settings=self.settings,
+            db=self.db,
+        )
+        self.memory_updater = MemoryUpdater(settings=self.settings, db=self.db)
+        await self.dream_scheduler.init()
+        await self.memory_updater.init()
+        logger.info("Learning system ready.")
+
+        # Step 11: Initialise alert manager
+        logger.info("[11/14] Initialising alert manager…")
+        self.alert_manager = AlertManager(settings=self.settings)
+        await self.alert_manager.init()
+        logger.info("Alert manager ready.")
+
+        # Step 12: Register signal handlers
+        logger.info("[12/14] Registering OS signal handlers…")
+        loop = asyncio.get_running_loop()
+        try:
+            import sys as _sys
+            _signals = (signal.SIGTERM, signal.SIGINT) if _sys.platform != "win32" else (signal.SIGINT,)
+            for sig in _signals:
+                loop.add_signal_handler(sig, lambda s=sig: self._handle_signal(s))
+        except (NotImplementedError, AttributeError):
+            # Windows: add_signal_handler not supported; rely on KeyboardInterrupt
+            pass
+        logger.info("Signal handlers registered.")
+
+        # Step 13: Health registry initial population
+        logger.info("[13/14] Populating initial health registry…")
+        self._update_health("supabase", True, "Connected")
+        self._update_health("llm_ensemble", True, f"{len(self.llm_ensemble.models)} models")
+        self._update_health("agent_coordinator", True, "7 agents initialised")
+        self._update_health("risk_manager", True, "All 5 layers active")
+        self._update_health("execution_engine", True, f"{'paper' if self.settings.paper_mode else 'live'} mode")
+
+        logger.info("[14/14] Startup sequence complete.")
+
+    # ------------------------------------------------------------------
+    # Main Event Loop
+    # ------------------------------------------------------------------
+
+    async def _run(self) -> None:
+        """Spawn all background tasks and block until shutdown."""
+
+        background_coros = []
+
+        # Data ingestion loops — one task per market
+        for market_name, orch in self.market_orchestrators.items():
+            background_coros.append(
+                self._supervised_task(
+                    f"data_ingestion:{market_name}",
+                    orch.run_ingestion_loop,
+                )
+            )
+
+        # Learning system tasks
+        background_coros.append(
+            self._supervised_task("dream_scheduler", self.dream_scheduler.run)
+        )
+        background_coros.append(
+            self._supervised_task("memory_updater", self.memory_updater.run)
+        )
+
+        # Health check loop
+        background_coros.append(self._health_check_loop())
+
+        # Watchdog loop
+        background_coros.append(self._watchdog_loop())
+
+        # Alert manager loop
+        background_coros.append(
+            self._supervised_task("alert_manager", self.alert_manager.run)
+        )
+
+        # Gather everything — shutdown_event cancels via _supervised_task wrappers
+        await asyncio.gather(*[self._track_task(c) for c in background_coros])
+
+    # ------------------------------------------------------------------
+    # Signal Generation (called by MarketOrchestrator on candle close)
+    # ------------------------------------------------------------------
+
+    async def _on_candle_close(
+        self,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        candle: Dict[str, Any],
+    ) -> None:
+        """
+        Full signal generation pipeline executed on each new candle close.
+
+        Steps:
+          1. Compute indicators (all timeframes for this symbol)
+          2. Update market regime detector
+          3. Check if any strategy generates a candidate signal
+          4. If candidate: run full agent debate
+          5. Run signal fusion engine
+          6. Apply edge filter
+          7. If edge detected: send to risk manager
+          8. If risk approved: execute trade
+          9. Store signal and decision to Supabase
+          10. Send alert if trade executed
+        """
+        key = f"{market}:{symbol}"
+        logger.debug("Candle close: %s %s %s", market, symbol, timeframe)
+
+        try:
+            # Step 1: Compute indicators
+            indicator_engine = self.indicator_engines.get(key)
+            if not indicator_engine:
+                logger.warning("No indicator engine for %s", key)
+                return
+            indicators = await indicator_engine.compute(candle, timeframe)
+
+            # Step 2: Update market regime
+            regime_detector = self.regime_detectors.get(key)
+            regime = await regime_detector.update(indicators)
+
+            # Step 3: Check strategies for candidate signals
+            market_orch = self.market_orchestrators[market]
+            candidate = await market_orch.check_strategies(
+                symbol=symbol,
+                timeframe=timeframe,
+                candle=candle,
+                indicators=indicators,
+                regime=regime,
+            )
+            if candidate is None:
+                return  # No signal from any strategy
+
+            logger.info(
+                "Candidate signal: %s %s %s dir=%s conf=%.2f",
+                market, symbol, timeframe,
+                candidate.direction, candidate.confidence,
+            )
+
+            # Step 4: Agent debate
+            debate_result = await self.agent_coordinator.debate(
+                candidate=candidate,
+                indicators=indicators,
+                regime=regime,
+                candle=candle,
+            )
+
+            # Step 5: Signal fusion
+            fused = await self.fusion_engine.fuse(
+                candidate=candidate,
+                debate_result=debate_result,
+                indicators=indicators,
+            )
+
+            # Step 6: Edge filter
+            edge_result = await self.edge_filter.evaluate(fused)
+            if not edge_result.edge_detected:
+                logger.debug("Edge filter rejected signal: EV=%.4f", edge_result.expected_value)
+                await self._store_signal(fused, edge_result, risk_result=None, trade_result=None)
+                return
+
+            # Step 7: Risk manager
+            risk_result = await self.risk_manager.evaluate(
+                signal=fused,
+                edge=edge_result,
+            )
+            if not risk_result.approved:
+                logger.info(
+                    "Risk rejected: %s — reason=%s",
+                    key, risk_result.rejection_reason,
+                )
+                await self._store_signal(fused, edge_result, risk_result, trade_result=None)
+                return
+
+            # Step 8: Execute trade
+            trade_result = await self.execution_engine.execute(
+                signal=fused,
+                risk_result=risk_result,
+            )
+            logger.info(
+                "Trade executed: %s %s size=%.4f price=%.4f",
+                key, fused.direction,
+                trade_result.quantity, trade_result.entry_price,
+            )
+
+            # Step 9: Store signal and decision
+            await self._store_signal(fused, edge_result, risk_result, trade_result)
+
+            # Step 10: Alert
+            if self.alert_manager:
+                await self.alert_manager.notify_trade(
+                    trade=trade_result,
+                    signal=fused,
+                )
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Error in signal generation for %s: %s", key, exc, exc_info=True
+            )
+
+    # ------------------------------------------------------------------
+    # Storage Helper
+    # ------------------------------------------------------------------
+
+    async def _store_signal(
+        self,
+        fused_signal: Any,
+        edge_result: Any,
+        risk_result: Optional[Any],
+        trade_result: Optional[Any],
+    ) -> None:
+        """Persist signal, agent decisions, and trade outcome to Supabase."""
+        if not self.db:
+            return
+        try:
+            signal_id = await self.db.store_signal(
+                signal=fused_signal,
+                edge=edge_result,
+                risk=risk_result,
+            )
+            if trade_result:
+                await self.db.store_trade(signal_id=signal_id, trade=trade_result)
+            # Store per-agent decisions
+            if hasattr(fused_signal, "agent_votes"):
+                await self.db.store_agent_decisions(
+                    signal_id=signal_id,
+                    decisions=fused_signal.agent_votes,
+                )
+        except Exception as exc:
+            logger.error("Failed to store signal: %s", exc, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Health Check Loop
+    # ------------------------------------------------------------------
+
+    async def _health_check_loop(self) -> None:
+        """Check all component health every HEALTH_CHECK_INTERVAL_SECONDS seconds."""
+        while not self._shutdown_event.is_set():
+            try:
+                await self._perform_health_check()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Health check error: %s", exc, exc_info=True)
+
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=HEALTH_CHECK_INTERVAL_SECONDS,
+                )
+                break  # Shutdown requested
+            except asyncio.TimeoutError:
+                pass  # Normal: check again
+
+    async def _perform_health_check(self) -> None:
+        """Run all health checks and alert on failures."""
+        now = datetime.now(timezone.utc)
+
+        # DB health
+        try:
+            db_ok = await self.db.health_check()
+            self._update_health("supabase", db_ok, "" if db_ok else "Ping failed")
+        except Exception as exc:
+            self._update_health("supabase", False, str(exc))
+
+        # Market data freshness
+        for market_name, orch in self.market_orchestrators.items():
+            try:
+                stale_symbols = await orch.check_data_freshness()
+                healthy = len(stale_symbols) == 0
+                detail = f"Stale: {stale_symbols}" if stale_symbols else "All fresh"
+                self._update_health(f"market:{market_name}", healthy, detail)
+                if not healthy and self.alert_manager:
+                    await self.alert_manager.notify_warning(
+                        f"Stale market data [{market_name}]: {stale_symbols}"
+                    )
+            except Exception as exc:
+                self._update_health(f"market:{market_name}", False, str(exc))
+
+        # Risk manager circuit breakers
+        if self.risk_manager:
+            cb_status = await self.risk_manager.get_circuit_breaker_status()
+            any_tripped = any(cb.tripped for cb in cb_status.values())
+            if any_tripped:
+                tripped = [k for k, v in cb_status.items() if v.tripped]
+                self._update_health("risk_manager", False, f"Circuit breakers tripped: {tripped}")
+                if self.alert_manager:
+                    await self.alert_manager.notify_critical(
+                        f"Circuit breakers tripped: {tripped}"
+                    )
+            else:
+                self._update_health("risk_manager", True, "All circuit breakers nominal")
+
+        # Execution engine
+        if self.execution_engine:
+            exec_health = await self.execution_engine.health_check()
+            self._update_health("execution_engine", exec_health.ok, exec_health.detail)
+
+        # Log summary
+        unhealthy = [
+            name for name, h in self._component_health.items() if not h.healthy
+        ]
+        if unhealthy:
+            logger.warning("Health check: UNHEALTHY components: %s", unhealthy)
+            try:
+                import pathlib
+                pathlib.Path("/tmp/nexus_healthy").unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            logger.debug("Health check: all components healthy at %s", now.isoformat())
+            try:
+                open("/tmp/nexus_healthy", "w").close()  # noqa: WPS515
+            except Exception:
+                pass
+
+    def _update_health(self, name: str, healthy: bool, detail: str = "") -> None:
+        self._component_health[name] = ComponentHealth(
+            name=name,
+            healthy=healthy,
+            last_checked=datetime.now(timezone.utc),
+            error=None if healthy else detail,
+            details={"detail": detail},
+        )
+
+    # ------------------------------------------------------------------
+    # Watchdog Loop
+    # ------------------------------------------------------------------
+
+    async def _watchdog_loop(self) -> None:
+        """Notify systemd watchdog every WATCHDOG_INTERVAL_SECONDS seconds."""
+        import ctypes
+        import ctypes.util
+
+        _sd_lib = None
+        sd_libname = ctypes.util.find_library("systemd")
+        if sd_libname:
+            try:
+                _sd_lib = ctypes.CDLL(sd_libname)
+            except OSError:
+                pass
+
+        while not self._shutdown_event.is_set():
+            if _sd_lib:
+                try:
+                    _sd_lib.sd_notify(0, b"WATCHDOG=1")
+                except Exception:
+                    pass
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=WATCHDOG_INTERVAL_SECONDS,
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Supervised Task Wrapper (auto-restart)
+    # ------------------------------------------------------------------
+
+    async def _supervised_task(
+        self,
+        name: str,
+        coro_factory,
+        *args,
+        **kwargs,
+    ) -> None:
+        """
+        Run a coroutine with auto-restart on failure.
+        After MAX_RESTARTS failures within RESTART_WINDOW_SECONDS, alert and stop.
+        """
+        record = self._restart_records[name]
+
+        while not self._shutdown_event.is_set():
+            try:
+                await coro_factory(*args, **kwargs)
+                logger.info("Task '%s' completed normally.", name)
+                return  # Clean exit
+            except asyncio.CancelledError:
+                logger.info("Task '%s' was cancelled.", name)
+                return
+            except Exception as exc:
+                if self._shutdown_event.is_set():
+                    return
+
+                record.record()
+                recent = record.count_recent()
+                logger.error(
+                    "Task '%s' crashed (attempt %d/%d in window): %s",
+                    name, recent, MAX_RESTARTS, exc, exc_info=True,
+                )
+
+                if recent >= MAX_RESTARTS:
+                    msg = (
+                        f"Component '{name}' has crashed {recent} times in "
+                        f"{RESTART_WINDOW_SECONDS}s — giving up."
+                    )
+                    logger.critical(msg)
+                    self._update_health(name, False, msg)
+                    if self.alert_manager:
+                        await self.alert_manager.notify_critical(msg)
+                    return
+
+                # Exponential back-off before restart
+                backoff = min(2 ** recent, 60)
+                logger.info("Restarting '%s' in %ds…", name, backoff)
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(), timeout=backoff
+                    )
+                    return  # Shutdown requested during backoff
+                except asyncio.TimeoutError:
+                    pass
+
+    def _track_task(self, coro) -> asyncio.Task:
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    # ------------------------------------------------------------------
+    # OS Signal Handler
+    # ------------------------------------------------------------------
+
+    def _handle_signal(self, sig: signal.Signals) -> None:
+        logger.info("Received signal %s — initiating shutdown.", sig.name)
+        asyncio.ensure_future(self.stop())
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+async def _async_main() -> int:
+    bot = NexusAlpha()
+    try:
+        await bot.start()
+        return 0
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received.")
+        return 0
+    except Exception:
+        logger.critical("Unhandled exception", exc_info=True)
+        return 1
+
+
+def main() -> None:
+    try:
+        exit_code = asyncio.run(_async_main())
+    except KeyboardInterrupt:
+        exit_code = 0
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
