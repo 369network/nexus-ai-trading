@@ -25,6 +25,8 @@ import {
   Menu,
   X,
   ScanSearch,
+  Bell,
+  FlaskConical,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { useRealtimeData } from '@/hooks/useRealtimeData';
@@ -46,6 +48,8 @@ const NAV_ITEMS = [
   { href: '/risk', label: 'Risk Monitor', icon: Shield },
   { href: '/performance', label: 'Performance', icon: BarChart3 },
   { href: '/journal', label: 'Trade Journal', icon: BookOpen },
+  { href: '/backtest', label: 'Backtester', icon: FlaskConical },
+  { href: '/alerts', label: 'Alerts', icon: Bell },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 

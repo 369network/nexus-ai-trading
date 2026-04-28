@@ -23,6 +23,10 @@ import {
   ChevronUp,
   ExternalLink,
   Zap,
+  Send,
+  Bell,
+  BellOff,
+  MessageCircle,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { cn, formatTimeAgo } from '@/lib/utils';
@@ -875,8 +879,279 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* ── Telegram Notifications ── */}
+      <TelegramNotificationsPanel />
+
       {/* Emergency Stop */}
       <EmergencyStopDialog />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Telegram Notifications Panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TELEGRAM_STORAGE_KEY = 'nexus_telegram_config';
+
+const TELEGRAM_EVENTS = [
+  { key: 'new_trade',       label: 'Trade Executed',     description: 'When a new trade is opened or closed', default: true },
+  { key: 'signal',          label: 'Signal Generated',   description: 'When an AI signal is produced (strength ≥ 75)', default: false },
+  { key: 'circuit_breaker', label: 'Circuit Breaker',    description: 'When any circuit breaker trips', default: true },
+  { key: 'daily_summary',   label: 'Daily Summary',      description: 'End-of-day P&L and performance summary', default: true },
+  { key: 'emergency_stop',  label: 'Emergency Stop',     description: 'When emergency stop is triggered', default: true },
+  { key: 'drawdown_alert',  label: 'Drawdown Alert',     description: 'When drawdown exceeds 5%', default: true },
+];
+
+interface TelegramConfig {
+  botToken: string;
+  chatId: string;
+  enabled: boolean;
+  events: Record<string, boolean>;
+}
+
+function TelegramNotificationsPanel() {
+  const [config, setConfig] = useState<TelegramConfig>({
+    botToken: '',
+    chatId: '',
+    enabled: false,
+    events: Object.fromEntries(TELEGRAM_EVENTS.map((e) => [e.key, e.default])),
+  });
+  const [showToken, setShowToken] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
+  const [testError, setTestError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  // Load from localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(TELEGRAM_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<TelegramConfig>;
+        setConfig((prev) => ({
+          ...prev,
+          ...parsed,
+          events: { ...prev.events, ...(parsed.events ?? {}) },
+        }));
+      }
+    } catch {}
+  }, []);
+
+  const save = () => {
+    try {
+      localStorage.setItem(TELEGRAM_STORAGE_KEY, JSON.stringify(config));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch {}
+  };
+
+  const sendTest = async () => {
+    if (!config.botToken || !config.chatId) {
+      setTestError('Enter bot token and chat ID first');
+      setTestStatus('error');
+      return;
+    }
+    setTestStatus('sending');
+    setTestError('');
+    try {
+      const text = encodeURIComponent(
+        `🤖 *NEXUS ALPHA* — Test Notification\n\n` +
+        `✅ Telegram integration is working correctly.\n` +
+        `📅 ${new Date().toLocaleString()}\n` +
+        `🔗 Dashboard connected.`
+      );
+      const url = `https://api.telegram.org/bot${config.botToken}/sendMessage?chat_id=${config.chatId}&text=${text}&parse_mode=Markdown`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const data = await res.json();
+      if (data.ok) {
+        setTestStatus('ok');
+        setTimeout(() => setTestStatus('idle'), 4000);
+      } else {
+        setTestError(data.description ?? 'Telegram API error');
+        setTestStatus('error');
+      }
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : 'Network error');
+      setTestStatus('error');
+    }
+  };
+
+  return (
+    <div className="nexus-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <MessageCircle size={16} className="text-nexus-blue" />
+          <h2 className="font-semibold text-white">Telegram Notifications</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={cn('text-xs font-medium', config.enabled ? 'text-nexus-green' : 'text-muted')}>
+            {config.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+          <button
+            onClick={() => setConfig((prev) => ({ ...prev, enabled: !prev.enabled }))}
+            className={cn(
+              'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
+              config.enabled ? 'bg-nexus-green' : 'bg-border'
+            )}
+          >
+            <span
+              className={cn(
+                'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform',
+                config.enabled ? 'translate-x-4' : 'translate-x-1'
+              )}
+            />
+          </button>
+        </div>
+      </div>
+
+      <p className="text-xs text-muted mb-4">
+        Send real-time trade alerts and signals to your Telegram.{' '}
+        <a
+          href="https://core.telegram.org/bots#how-do-i-create-a-bot"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-nexus-blue underline"
+        >
+          Create a bot via @BotFather ↗
+        </a>
+        . Your token is stored only in your browser.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        {/* Bot Token */}
+        <div>
+          <label className="text-xs text-muted mb-1 block">Bot Token</label>
+          <div className="relative">
+            <input
+              type={showToken ? 'text' : 'password'}
+              value={config.botToken}
+              onChange={(e) => setConfig((prev) => ({ ...prev, botToken: e.target.value }))}
+              placeholder="123456:ABCdef..."
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-muted pr-10 focus:outline-none focus:border-nexus-blue"
+            />
+            <button
+              onClick={() => setShowToken((p) => !p)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-white transition-colors"
+            >
+              {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Chat ID */}
+        <div>
+          <label className="text-xs text-muted mb-1 block">Chat ID</label>
+          <input
+            type="text"
+            value={config.chatId}
+            onChange={(e) => setConfig((prev) => ({ ...prev, chatId: e.target.value }))}
+            placeholder="-100123456789 or @channelname"
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-muted focus:outline-none focus:border-nexus-blue"
+          />
+          <p className="text-xs text-muted mt-1">
+            Add your bot to a group, then use{' '}
+            <code className="font-mono bg-background px-1 py-0.5 rounded text-nexus-blue">@userinfobot</code>{' '}
+            to find your chat ID.
+          </p>
+        </div>
+      </div>
+
+      {/* Event toggles */}
+      <div className="mb-4">
+        <div className="text-xs text-muted uppercase tracking-wider mb-2">Notify on</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {TELEGRAM_EVENTS.map((event) => (
+            <div
+              key={event.key}
+              className="flex items-start justify-between gap-3 bg-background rounded-lg px-3 py-2.5"
+            >
+              <div>
+                <div className="text-sm font-medium text-white flex items-center gap-1.5">
+                  {config.events[event.key]
+                    ? <Bell size={11} className="text-nexus-green" />
+                    : <BellOff size={11} className="text-muted" />
+                  }
+                  {event.label}
+                </div>
+                <div className="text-xs text-muted mt-0.5">{event.description}</div>
+              </div>
+              <button
+                onClick={() => setConfig((prev) => ({
+                  ...prev,
+                  events: { ...prev.events, [event.key]: !prev.events[event.key] },
+                }))}
+                className={cn(
+                  'relative inline-flex h-4 w-8 flex-shrink-0 items-center rounded-full transition-colors mt-0.5',
+                  config.events[event.key] ? 'bg-nexus-green' : 'bg-border'
+                )}
+              >
+                <span
+                  className={cn(
+                    'inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform',
+                    config.events[event.key] ? 'translate-x-4' : 'translate-x-0.5'
+                  )}
+                />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={sendTest}
+          disabled={testStatus === 'sending' || !config.botToken || !config.chatId}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+            testStatus === 'ok'
+              ? 'bg-nexus-green/20 text-nexus-green border border-nexus-green/30'
+              : testStatus === 'error'
+                ? 'bg-nexus-red/20 text-nexus-red border border-nexus-red/30'
+                : 'bg-nexus-blue/10 text-nexus-blue border border-nexus-blue/20 hover:bg-nexus-blue/20 disabled:opacity-40 disabled:cursor-not-allowed'
+          )}
+        >
+          {testStatus === 'sending' ? (
+            <><Loader2 size={13} className="animate-spin" /> Sending...</>
+          ) : testStatus === 'ok' ? (
+            <><CheckCircle2 size={13} /> Sent!</>
+          ) : testStatus === 'error' ? (
+            <><XCircle size={13} /> Failed</>
+          ) : (
+            <><Send size={13} /> Send Test</>
+          )}
+        </button>
+
+        <button
+          onClick={save}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+            saved
+              ? 'bg-nexus-green/20 text-nexus-green border border-nexus-green/30'
+              : 'bg-border text-white hover:bg-border-bright border border-border'
+          )}
+        >
+          {saved ? <><CheckCircle2 size={13} /> Saved</> : <><Save size={13} /> Save Config</>}
+        </button>
+      </div>
+
+      {testStatus === 'error' && testError && (
+        <div className="mt-2 text-xs text-nexus-red flex items-center gap-1.5">
+          <AlertTriangle size={11} />
+          {testError}
+        </div>
+      )}
+
+      <div className="mt-4 p-3 bg-nexus-blue/5 border border-nexus-blue/20 rounded-lg">
+        <p className="text-xs text-nexus-blue font-medium mb-1">📱 How notifications work</p>
+        <p className="text-xs text-muted">
+          The dashboard sends notifications directly from your browser. For persistent alerts when
+          the dashboard is closed, configure the same bot token as{' '}
+          <code className="font-mono bg-background px-1 py-0.5 rounded">TELEGRAM_BOT_TOKEN</code> and{' '}
+          <code className="font-mono bg-background px-1 py-0.5 rounded">TELEGRAM_CHAT_ID</code>{' '}
+          environment variables in the VPS <code className="font-mono bg-background px-1 py-0.5 rounded">.env</code> file.
+        </p>
+      </div>
     </div>
   );
 }
