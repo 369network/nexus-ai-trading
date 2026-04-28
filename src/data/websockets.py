@@ -155,7 +155,7 @@ class PollingConnector(BaseWSConnector):
                 except asyncio.CancelledError:
                     return
                 except Exception as exc:
-                    logger.debug(
+                    logger.warning(
                         "[%s/%s/%s] Polling error: %s",
                         self.market, self.symbol, tf, exc,
                     )
