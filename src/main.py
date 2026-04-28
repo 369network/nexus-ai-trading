@@ -919,12 +919,18 @@ class NexusAlpha:
 
                         # Also push open positions list to health server
                         try:
-                            raw_positions = getattr(state, "positions", None) or []
+                            positions_dict = getattr(state, "positions", None) or {}
                             from src.monitoring.health_server import update_positions
                             positions_payload = []
-                            for p in raw_positions:
+                            # positions is a Dict[str, Position] — iterate values
+                            raw_values = (
+                                positions_dict.values()
+                                if isinstance(positions_dict, dict)
+                                else positions_dict
+                            )
+                            for p in raw_values:
                                 if hasattr(p, "__dict__"):
-                                    positions_payload.append(p.__dict__)
+                                    positions_payload.append(vars(p))
                                 elif isinstance(p, dict):
                                     positions_payload.append(p)
                             update_positions(positions_payload)

@@ -80,6 +80,39 @@ class PaperPortfolio:
     def total_notional(self) -> float:
         return sum(p.notional_usd for p in self.positions.values())
 
+    # ------------------------------------------------------------------
+    # Convenience aliases used by main.py metric updater
+    # ------------------------------------------------------------------
+
+    @property
+    def equity(self) -> float:
+        """Alias for total_equity — current NAV in USD."""
+        return self.total_equity
+
+    @property
+    def portfolio_value(self) -> float:
+        """Alias for total_equity."""
+        return self.total_equity
+
+    @property
+    def open_positions(self) -> int:
+        """Number of currently open positions."""
+        return len(self.positions)
+
+    @property
+    def drawdown_pct(self) -> float:
+        """
+        Current drawdown from peak equity, as a negative percentage.
+        Returns 0.0 when there is no drawdown or peak is not yet established.
+        """
+        peak = self.peak_equity or self.initial_capital
+        if peak <= 0:
+            return 0.0
+        equity = self.total_equity
+        if equity >= peak:
+            return 0.0
+        return round((equity - peak) / peak * 100.0, 4)
+
 
 class PaperTrader(BaseExecutor):
     """
