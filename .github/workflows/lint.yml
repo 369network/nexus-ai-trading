@@ -1,0 +1,60 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    name: Python Lint (advisory only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install lint tools
+        run: pip install flake8 black
+
+      - name: flake8 — style & error check
+        # Warnings only — does not block merge.
+        continue-on-error: true
+        run: |
+          flake8 src/ \
+            --max-line-length=120 \
+            --ignore=E501,W503 \
+            --statistics \
+            --format='%(path)s:%(row)d:%(col)d: %(code)s %(text)s'
+
+      - name: black — formatting check
+        # Warnings only — does not block merge.
+        continue-on-error: true
+        run: |
+          black --check --diff src/
+
+      - name: Write lint summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Lint Results (advisory)
+
+          Both checks use `continue-on-error: true` — they will **never block a merge**.
+          Review the annotations above and fix before merging when practical.
+
+          | Tool    | Config                                   |
+          |---------|------------------------------------------|
+          | flake8  | max-line-length=120, ignore=E501,W503    |
+          | black   | --check --diff (no auto-fix)             |
+
+          To auto-fix locally:
+          ```bash
+          black src/
+          flake8 src/ --max-line-length=120 --ignore=E501,W503
+          ```
+          EOF

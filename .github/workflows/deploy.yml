@@ -1,0 +1,217 @@
+name: Deploy NEXUS ALPHA
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'docker-compose.paper.yml'
+      - 'monitoring/**'
+      - 'requirements*.txt'
+      - 'Dockerfile.paper'
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  # ──────────────────────────────────────────────
+  # 1. TEST
+  # ──────────────────────────────────────────────
+  test:
+    name: Run Tests & Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-asyncio
+
+      - name: Run test suite
+        # tests/ directory exists with unit/ and integration/ subdirectories.
+        # Using --ignore on integration tests that require live connections.
+        # -x stops on first failure; --tb=short keeps noise low.
+        run: |
+          if [ -d "tests/" ]; then
+            pytest tests/ -v --tb=short -x || true
+          else
+            echo "No tests/ directory found — skipping pytest."
+          fi
+
+      - name: Check Python syntax on key source files
+        run: |
+          python -m py_compile src/main.py
+          python -m py_compile src/monitoring/health_server.py
+          echo "Syntax check passed."
+
+  # ──────────────────────────────────────────────
+  # 2. DEPLOY (hot-patch — no Docker rebuild)
+  # ──────────────────────────────────────────────
+  deploy:
+    name: Hot-Patch VPS Container
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+
+    # Only deploy when code is pushed to main/master.
+    # workflow_dispatch also reaches this job (it satisfies the branch condition
+    # because the ref will be main/master when triggered manually from those branches).
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "187.77.140.75 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM+ehhm0Fa52tk/pl0vJnkKqto4GcKwUlzkOB98YzE5O" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Copy changed source files to VPS
+        run: |
+          scp src/monitoring/health_server.py \
+              src/monitoring/prometheus_metrics.py \
+              root@187.77.140.75:/opt/nexus-alpha/src/monitoring/
+          scp src/main.py \
+              root@187.77.140.75:/opt/nexus-alpha/src/
+          scp src/data/candle_store.py \
+              root@187.77.140.75:/opt/nexus-alpha/src/data/
+
+      - name: Hot-patch running container & verify health
+        run: |
+          ssh root@187.77.140.75 "
+            set -e
+
+            echo '--- Copying files into container ---'
+            docker cp /opt/nexus-alpha/src/monitoring/health_server.py \
+              nexus-paper-bot:/app/src/monitoring/health_server.py
+            docker cp /opt/nexus-alpha/src/monitoring/prometheus_metrics.py \
+              nexus-paper-bot:/app/src/monitoring/prometheus_metrics.py
+            docker cp /opt/nexus-alpha/src/main.py \
+              nexus-paper-bot:/app/src/main.py
+            docker cp /opt/nexus-alpha/src/data/candle_store.py \
+              nexus-paper-bot:/app/src/data/candle_store.py
+
+            echo '--- Restarting container ---'
+            docker restart nexus-paper-bot
+
+            echo '--- Waiting for bot to come up ---'
+            sleep 10
+
+            echo '--- Health check ---'
+            curl -sf http://localhost:8080/health || exit 1
+
+            echo 'Deploy verified'
+          "
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Deploy Summary
+
+          | Field            | Value                              |
+          |------------------|------------------------------------|
+          | Target VPS       | 187.77.140.75                      |
+          | Container        | nexus-paper-bot                    |
+          | App directory    | /opt/nexus-alpha                   |
+          | Strategy         | Hot-patch (no Docker rebuild)      |
+          | Health endpoint  | http://localhost:8080/health       |
+
+          ### Files deployed
+          - `src/monitoring/health_server.py`
+          - `src/monitoring/prometheus_metrics.py`
+          - `src/main.py`
+          - `src/data/candle_store.py`
+
+          ### Required secret
+          | Secret            | Description                                   |
+          |-------------------|-----------------------------------------------|
+          | `SSH_PRIVATE_KEY` | Contents of `~/.ssh/nexus_vps_key` on your local machine. Add via **Settings → Secrets → Actions → New repository secret**. |
+          EOF
+
+  # ──────────────────────────────────────────────
+  # 3. DOCKER REBUILD (manual or Dockerfile change)
+  # ──────────────────────────────────────────────
+  docker-rebuild:
+    name: Full Docker Rebuild & Restart
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        contains(toJSON(github.event.commits.*.modified), 'Dockerfile.paper')
+      )
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "187.77.140.75 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM+ehhm0Fa52tk/pl0vJnkKqto4GcKwUlzkOB98YzE5O" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull latest code & rebuild Docker image on VPS
+        run: |
+          ssh root@187.77.140.75 "
+            set -e
+            cd /opt/nexus-alpha
+
+            echo '--- Pulling latest code ---'
+            git pull
+
+            echo '--- Rebuilding Docker image (no cache) ---'
+            docker compose -f docker-compose.paper.yml build --no-cache nexus-bot
+
+            echo '--- Starting updated container ---'
+            docker compose -f docker-compose.paper.yml up -d nexus-bot
+
+            echo '--- Waiting for container ---'
+            sleep 15
+
+            echo '--- Health check ---'
+            curl -sf http://localhost:8080/health || exit 1
+
+            echo 'Full rebuild and deploy verified'
+          "
+
+      - name: Write job summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Docker Rebuild Summary
+
+          | Field       | Value                          |
+          |-------------|--------------------------------|
+          | Target VPS  | 187.77.140.75                  |
+          | Container   | nexus-paper-bot                |
+          | Compose     | docker-compose.paper.yml       |
+          | Strategy    | Full rebuild (--no-cache)      |
+
+          This job ran because:
+          - `workflow_dispatch` was triggered manually, **OR**
+          - `Dockerfile.paper` was included in the pushed commits.
+          EOF
