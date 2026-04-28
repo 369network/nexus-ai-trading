@@ -1,0 +1,42 @@
+[Unit]
+Description=NEXUS ALPHA API Server
+After=network.target nexus-bot.service
+Requires=nexus-bot.service
+
+[Service]
+Type=exec
+User=nexus
+Group=nexus
+WorkingDirectory=/opt/nexus-alpha
+Environment="PYTHONPATH=/opt/nexus-alpha"
+EnvironmentFile=/opt/nexus-alpha/.env
+ExecStart=/opt/nexus-alpha/.venv/bin/python -m uvicorn src.api.server:app \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --loop uvloop \
+    --workers 2 \
+    --log-level info \
+    --access-log \
+    --no-use-colors
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus-api
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/opt/nexus-alpha/logs /opt/nexus-alpha/data
+
+[Install]
+WantedBy=multi-user.target

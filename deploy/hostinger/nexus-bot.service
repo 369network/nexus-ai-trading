@@ -1,0 +1,60 @@
+[Unit]
+Description=NEXUS ALPHA - Trading Bot (Signal Generation & Execution)
+Documentation=https://github.com/yourorg/nexus-alpha
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+# Ensure data service starts first
+After=nexus-data.service
+
+[Service]
+Type=notify
+User=NEXUS_USER
+Group=NEXUS_USER
+WorkingDirectory=NEXUS_DIR
+
+# Environment
+EnvironmentFile=NEXUS_DIR/.env
+Environment=PYTHONPATH=NEXUS_DIR
+Environment=PYTHONUNBUFFERED=1
+Environment=LOG_LEVEL=INFO
+
+# Main process
+ExecStart=NEXUS_DIR/.venv/bin/python -m src.main
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Graceful shutdown timeout
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy (auto-restart with exponential backoff)
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+# Systemd watchdog (bot pings sd_notify every 30s; killed if >120s silent)
+WatchdogSec=120
+NotifyAccess=main
+
+# Resource limits
+MemoryMax=6G
+MemorySwapMax=0
+CPUQuota=300%
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=NEXUS_DIR /var/log/nexus /tmp
+
+# Logging
+StandardOutput=append:/var/log/nexus/bot.log
+StandardError=append:/var/log/nexus/bot-error.log
+SyslogIdentifier=nexus-bot
+
+[Install]
+WantedBy=multi-user.target

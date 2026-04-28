@@ -1,0 +1,38 @@
+[Unit]
+Description=NEXUS ALPHA Paper Trading Bot
+Documentation=https://github.com/your-org/nexus-alpha
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/nexus-alpha
+
+# Start the full compose stack
+ExecStartPre=/usr/bin/docker compose -f /opt/nexus-alpha/docker-compose.paper.yml pull --quiet
+ExecStart=/usr/bin/docker compose -f /opt/nexus-alpha/docker-compose.paper.yml up --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/nexus-alpha/docker-compose.paper.yml down
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Environment
+EnvironmentFile=-/opt/nexus-alpha/.env
+
+# Logging — forward stdout/stderr to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus-alpha
+
+# Give Docker enough time to shut down cleanly
+TimeoutStopSec=60
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

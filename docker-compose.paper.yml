@@ -1,0 +1,99 @@
+version: "3.9"
+
+# =============================================================================
+# NEXUS ALPHA — Paper Trading Compose (minimal, VPS-ready)
+# Services: nexus-bot only (no local Postgres — uses Supabase)
+# =============================================================================
+
+networks:
+  nexus-paper:
+    driver: bridge
+
+volumes:
+  nexus-logs:
+  nexus-state:
+  prometheus-data:
+  grafana-data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # NEXUS ALPHA paper trading bot
+  # ---------------------------------------------------------------------------
+  nexus-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.paper
+    image: nexus-alpha/paper:latest
+    container_name: nexus-paper-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PAPER_MODE=true
+      - ENVIRONMENT=paper
+    volumes:
+      - nexus-logs:/app/logs
+      - nexus-state:/app/.nexus
+      - ./config:/app/config:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    networks:
+      - nexus-paper
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: nexus-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks:
+      - nexus-paper
+    depends_on:
+      - nexus-bot
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: nexus-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-nexus_grafana_2024}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://187.77.140.75:3001
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - nexus-paper
+    depends_on:
+      - prometheus

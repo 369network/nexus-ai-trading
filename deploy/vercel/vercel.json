@@ -1,0 +1,77 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "name": "nexus-alpha-dashboard",
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm ci",
+  "outputDirectory": ".next",
+
+  "env": {
+    "NEXT_PUBLIC_SUPABASE_URL":      "@nexus_supabase_url",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "@nexus_supabase_anon_key",
+    "NEXT_PUBLIC_APP_ENV":           "production"
+  },
+
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_SUPABASE_URL":      "@nexus_supabase_url",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY": "@nexus_supabase_anon_key"
+    }
+  },
+
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options",     "value": "nosniff" },
+        { "key": "X-Frame-Options",             "value": "DENY" },
+        { "key": "X-XSS-Protection",            "value": "1; mode=block" },
+        { "key": "Referrer-Policy",             "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy",          "value": "camera=(), microphone=(), geolocation=()" },
+        { "key": "Strict-Transport-Security",   "value": "max-age=63072000; includeSubDomains; preload" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    }
+  ],
+
+  "rewrites": [
+    {
+      "source": "/api/health",
+      "destination": "/api/health"
+    }
+  ],
+
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/dashboard",
+      "permanent": false
+    }
+  ],
+
+  "regions": ["sin1", "sfo1"],
+
+  "functions": {
+    "app/api/**/*.ts": {
+      "maxDuration": 30
+    }
+  },
+
+  "crons": [
+    {
+      "path": "/api/cron/portfolio-snapshot",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/model-performance",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

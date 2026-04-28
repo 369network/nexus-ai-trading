@@ -1,0 +1,64 @@
+groups:
+  - name: nexus_trading_alerts
+    interval: 15s
+    rules:
+
+      # Bot container unreachable for more than 1 minute
+      - alert: BotDown
+        expr: up{job="nexus-bot"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          system: nexus-alpha
+        annotations:
+          summary: "NEXUS bot is down"
+          description: "The nexus-paper-bot container has been unreachable for more than 1 minute. Target: {{ $labels.instance }}"
+
+      # Portfolio drawdown exceeds 10% for 5 minutes
+      - alert: HighDrawdown
+        expr: nexus_portfolio_drawdown > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          system: nexus-alpha
+        annotations:
+          summary: "High portfolio drawdown detected"
+          description: "Portfolio drawdown is {{ $value | humanizePercentage }} (threshold: 10%) for more than 5 minutes."
+
+      # Daily PnL below -3% for 1 minute
+      - alert: DailyLossLimit
+        expr: nexus_portfolio_daily_pnl < -0.03
+        for: 1m
+        labels:
+          severity: critical
+          system: nexus-alpha
+        annotations:
+          summary: "Daily loss limit breached"
+          description: "Daily PnL is {{ $value | humanizePercentage }} (limit: -3%). Immediate review required."
+
+      # LLM error rate exceeds 5 per minute for 5 minutes
+      - alert: LLMErrors
+        expr: rate(nexus_llm_errors_total[1m]) * 60 > 5
+        for: 5m
+        labels:
+          severity: warning
+          system: nexus-alpha
+        annotations:
+          summary: "High LLM error rate"
+          description: "LLM errors are occurring at {{ $value | humanize }} per minute (threshold: 5/min) for more than 5 minutes."
+
+      # No signals generated for 2 hours (market hours: 09:00–17:00 UTC weekdays)
+      - alert: NoTradesWarning
+        expr: >
+          increase(nexus_signals_total[2h]) == 0
+          and
+          (hour() >= 9 and hour() < 17)
+          and
+          (day_of_week() >= 1 and day_of_week() <= 5)
+        for: 2h
+        labels:
+          severity: warning
+          system: nexus-alpha
+        annotations:
+          summary: "No trading signals generated"
+          description: "nexus_signals_total has not increased in the last 2 hours during market hours. The signal pipeline may be stalled."

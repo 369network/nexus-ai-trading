@@ -1,0 +1,54 @@
+[Unit]
+Description=NEXUS ALPHA - Data Ingestion Service
+Documentation=https://github.com/yourorg/nexus-alpha
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=NEXUS_USER
+Group=NEXUS_USER
+WorkingDirectory=NEXUS_DIR
+
+# Environment
+EnvironmentFile=NEXUS_DIR/.env
+Environment=PYTHONPATH=NEXUS_DIR
+Environment=PYTHONUNBUFFERED=1
+Environment=LOG_LEVEL=INFO
+# Data-only mode: only ingests and stores candles, does NOT execute trades
+Environment=DATA_ONLY_MODE=true
+
+# Data ingestion entry point (only market data, no signals or execution)
+ExecStart=NEXUS_DIR/.venv/bin/python -m src.data.standalone_ingestor
+
+# Graceful shutdown
+TimeoutStopSec=20
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy — restart quickly since this is pure data ingestion
+Restart=always
+RestartSec=5
+StartLimitBurst=10
+StartLimitIntervalSec=60
+
+# Resource limits — lighter than main bot
+MemoryMax=1G
+MemorySwapMax=0
+CPUQuota=100%
+LimitNOFILE=32768
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=NEXUS_DIR /var/log/nexus /tmp
+
+# Logging (separate log file from main bot)
+StandardOutput=append:/var/log/nexus/data.log
+StandardError=append:/var/log/nexus/data-error.log
+SyslogIdentifier=nexus-data
+
+[Install]
+WantedBy=multi-user.target

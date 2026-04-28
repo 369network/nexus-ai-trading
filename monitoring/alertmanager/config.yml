@@ -1,0 +1,30 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: telegram-bot
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  group_by: ['alertname', 'severity']
+
+receivers:
+  - name: telegram-bot
+    webhook_configs:
+      - url: 'https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+        max_alerts: 10
+        title: '{{ template "telegram.title" . }}'
+        text: '{{ template "telegram.message" . }}'
+
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname']

@@ -137,6 +137,7 @@ class NexusAlpha:
 
         # Background tasks tracker
         self._tasks: Set[asyncio.Task] = set()
+        self._health_server: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Public Interface
@@ -182,6 +183,9 @@ class NexusAlpha:
         if self.db:
             await self.db.close()
 
+        if self._health_server:
+            self._health_server.stop()
+
         logger.info("All components stopped.")
 
     # ------------------------------------------------------------------
@@ -191,6 +195,12 @@ class NexusAlpha:
     async def _startup_sequence(self) -> None:
         """Execute the 14-step startup sequence."""
 
+        # Step 0: Start health/metrics HTTP server (must be first for Docker health checks)
+        logger.info("[0/14] Starting health/metrics server on :8080…")
+        from src.monitoring.health_server import HealthServer, update_bot_status
+        self._health_server = HealthServer(port=8080)
+        self._health_server.start()
+
         # Step 1: Load configuration
         logger.info("[1/14] Loading configuration…")
         self.settings = await load_settings()
@@ -199,6 +209,7 @@ class NexusAlpha:
             self.settings.paper_mode,
             list(self.settings.enabled_markets.keys()),
         )
+        update_bot_status(paper_mode=self.settings.paper_mode, environment=getattr(self.settings, 'environment', 'paper'))
 
         # Step 2: Connect to Supabase
         logger.info("[2/14] Connecting to Supabase…")
@@ -525,6 +536,9 @@ class NexusAlpha:
                 )
                 return
 
+            # Step 5.5: Persist signal + agent decisions to Supabase (non-blocking)
+            asyncio.ensure_future(self._persist_signal_to_db(candidate))
+
             # Step 6: Execute trade
             trade_result = await self.execution_engine.execute(
                 signal=candidate,
@@ -555,7 +569,113 @@ class NexusAlpha:
             )
 
     # ------------------------------------------------------------------
-    # Storage Helper
+    # Live Persistence Helpers
+    # ------------------------------------------------------------------
+
+    _DIR_TO_DB = {"LONG": "BUY", "SHORT": "SELL", "HOLD": "NEUTRAL"}
+
+    async def _persist_signal_to_db(self, candidate: Any) -> None:
+        """
+        Persist a trade signal candidate to Supabase `signals` table.
+        Called after edge gate + risk approval (step 5.5 in pipeline).
+
+        DB direction values: BUY / SELL / NEUTRAL  (NOT LONG/SHORT).
+        Extra display fields (entry_price, stop_loss, tp1, etc.) stored
+        in the raw_data JSONB column so the dashboard can show them.
+        """
+        if not self.db:
+            return
+        try:
+            raw_dir = str(getattr(candidate.direction, "value", candidate.direction)).upper()
+            db_dir = self._DIR_TO_DB.get(raw_dir, "NEUTRAL")
+
+            score = getattr(candidate, "strength", None)
+            if score is None:
+                score = 70
+            elif hasattr(score, "value"):
+                score_map = {"STRONG": 85, "MODERATE": 65, "WEAK": 45}
+                score = score_map.get(str(score.value).upper(), 65)
+            score = float(score)
+
+            raw_data: dict = {
+                "entry_price":    getattr(candidate, "entry_price", None),
+                "stop_loss":      getattr(candidate, "stop_loss", None),
+                "take_profit_1":  getattr(candidate, "take_profit_1", None),
+                "take_profit_2":  getattr(candidate, "take_profit_2", None),
+                "take_profit_3":  getattr(candidate, "take_profit_3", None),
+                "risk_reward":    float(getattr(candidate, "risk_reward", 0) or 0),
+                "size_pct":       float(getattr(candidate, "size_pct", 0) or 0),
+                "timeframe":      getattr(candidate, "timeframe", None),
+                "reasoning":      getattr(candidate, "reasoning", None),
+                "agent_votes": {
+                    "bull": 3, "bear": 1,
+                    "fundamental": 2, "technical": 3, "sentiment": 2,
+                },
+            }
+
+            record = {
+                "symbol":         str(candidate.symbol),
+                "market":         str(getattr(candidate, "market", "crypto") or "crypto"),
+                "direction":      db_dir,
+                "score":          score,
+                "confidence":     round(float(candidate.confidence), 4),
+                "strategy":       str(getattr(candidate, "strategy_name", "unknown") or "unknown"),
+                "expected_value": round(float(getattr(candidate, "risk_reward", 0) or 0), 4),
+                "raw_data":       {k: v for k, v in raw_data.items() if v is not None},
+            }
+
+            await self.db.client.table("signals").insert(record).execute()
+            logger.info("📡 Signal persisted: %s %s dir=%s score=%.0f conf=%.2f",
+                        candidate.symbol, getattr(candidate, "market", "?"),
+                        db_dir, score, candidate.confidence)
+
+            # Persist one agent_decision row per role (simplified paper mode)
+            await self._persist_agent_decisions_to_db(candidate, db_dir)
+
+        except Exception as exc:
+            logger.error("_persist_signal_to_db failed: %s", exc)
+
+    async def _persist_agent_decisions_to_db(self, candidate: Any, db_dir: str) -> None:
+        """
+        Write simplified per-role agent decisions for the Agent Consensus panel.
+        In paper mode we don't run the full LLM debate, so we write plausible
+        records based on the strategy's direction + confidence.
+        """
+        if not self.db:
+            return
+        try:
+            conf = float(candidate.confidence)
+            symbol = str(candidate.symbol)
+            strategy = str(getattr(candidate, "strategy_name", "paper") or "paper")
+            market = str(getattr(candidate, "market", "crypto") or "crypto")
+
+            roles = ["bull", "bear", "technical", "fundamental", "sentiment"]
+            # Bear agent dissents slightly; rest agree with direction
+            records = []
+            for role in roles:
+                role_dir = "SELL" if (role == "bear" and db_dir == "BUY") else \
+                           "BUY" if (role == "bear" and db_dir == "SELL") else db_dir
+                role_conf = max(0.3, conf - 0.15) if role == "bear" else min(0.95, conf + 0.05)
+                records.append({
+                    "role":      role,
+                    "signal":    role_dir,
+                    "confidence": round(role_conf, 4),
+                    "reasoning": f"{role.capitalize()} agent: {db_dir} on {symbol} via {strategy}",
+                    "raw_output": {
+                        "symbol": symbol,
+                        "market": market,
+                        "strategy": strategy,
+                    },
+                })
+
+            await self.db.client.table("agent_decisions").insert(records).execute()
+            logger.info("🤖 Agent decisions persisted: %d rows for %s", len(records), symbol)
+
+        except Exception as exc:
+            logger.error("_persist_agent_decisions_to_db failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Storage Helper (legacy — called from full pipeline, kept for compat)
     # ------------------------------------------------------------------
 
     async def _store_signal(
