@@ -335,7 +335,9 @@ def _add_mfi(
         neg_flow = np.where(direction <= 0, money_flow, 0.0)
         pos_sum = pd.Series(pos_flow).rolling(period).sum().values
         neg_sum = pd.Series(neg_flow).rolling(period).sum().values
-        mfr = np.where(neg_sum > 0, pos_sum / neg_sum, 100)
+        # Guard against divide-by-zero when neg_sum == 0 (all positive flow)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            mfr = np.where(neg_sum > 0, pos_sum / neg_sum, 100.0)
         df["mfi"] = 100 - 100 / (1 + mfr)
     return df
 

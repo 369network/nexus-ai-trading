@@ -118,20 +118,18 @@ class ExecutionEngine:
                 if _existing is not None:
                     _pos_dir = str(getattr(_existing, "direction", "")).upper()
                     _sig_dir = direction.upper()
-                    _same_side = (
-                        (_sig_dir in ("BUY", "LONG") and _pos_dir in ("BUY", "LONG"))
-                        or (_sig_dir in ("SELL", "SHORT") and _pos_dir in ("SELL", "SHORT"))
+                    # Block BOTH same-direction (pyramid) AND opposite-direction (hedge).
+                    # In paper mode we hold at most 1 position per symbol.
+                    # Opposite signal means the existing trade should close via SL/TP first.
+                    logger.info(
+                        "ExecutionEngine: SKIPPING %s %s — already in %s position "
+                        "(one-position-per-symbol rule, pyramid_depth=%d)",
+                        direction, symbol, _pos_dir, _max_pyramid,
                     )
-                    if _same_side:
-                        logger.info(
-                            "ExecutionEngine: SKIPPING %s %s — already in %s position "
-                            "(pyramid depth=%d, guard active)",
-                            direction, symbol, _pos_dir, _max_pyramid,
-                        )
-                        raise PositionAlreadyOpen(
-                            f"Already holding {_pos_dir} {symbol}; pyramid guard active "
-                            f"(max_pyramid_depth={_max_pyramid})"
-                        )
+                    raise PositionAlreadyOpen(
+                        f"Already holding {_pos_dir} {symbol}; one-position-per-symbol "
+                        f"rule active (max_pyramid_depth={_max_pyramid})"
+                    )
             except PositionAlreadyOpen:
                 raise  # re-raise so caller can handle cleanly
             except Exception as _guard_exc:
