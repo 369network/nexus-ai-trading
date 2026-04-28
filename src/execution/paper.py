@@ -95,13 +95,131 @@ class PaperExecutor(PaperTrader):
         )
 
     async def init(self) -> None:
-        """Lifecycle init — logs readiness."""
+        """Lifecycle init — restore portfolio state from Supabase, then log readiness."""
+        await self._restore_state_from_db()
         logger.info(
             "PaperExecutor initialised: capital=$%.2f | fee=%.3f%% | slippage=%.3f%%",
             self._portfolio.capital,
             BINANCE_TAKER_FEE * 100,
             DEFAULT_SLIPPAGE_PCT * 100,
         )
+
+    async def _restore_state_from_db(self) -> None:
+        """Restore portfolio capital and open positions from Supabase on startup.
+
+        This ensures the paper trading portfolio is consistent across bot restarts:
+        1. Load the latest portfolio_snapshot to restore equity / capital.
+        2. Load all OPEN paper trades to rebuild the in-memory positions dict.
+        """
+        if self._db is None:
+            logger.debug("PaperExecutor: no DB client — starting with fresh capital")
+            return
+
+        # ── Step 1: restore capital from last portfolio snapshot ──────────────
+        try:
+            res = await self._db.client.table("portfolio_snapshots") \
+                .select("equity, cash, open_positions") \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+
+            if res.data:
+                snap = res.data[0]
+                restored_cash = float(snap.get("cash") or self._portfolio.capital)
+                restored_equity = float(snap.get("equity") or restored_cash)
+
+                self._portfolio.capital = restored_cash
+                self._portfolio.peak_equity = max(
+                    self._portfolio.peak_equity, restored_equity
+                )
+                logger.info(
+                    "PaperExecutor: restored capital=$%.2f from last portfolio snapshot",
+                    restored_cash,
+                )
+        except Exception as exc:
+            logger.warning("PaperExecutor: could not restore snapshot: %s", exc)
+
+        # ── Step 2: restore open positions from OPEN paper trades ─────────────
+        # Aggregate by symbol: multiple OPEN rows for the same symbol are merged
+        # using a quantity-weighted average entry price (matches in-memory behaviour).
+        try:
+            from src.execution.base_executor import Position
+
+            res = await self._db.client.table("trades") \
+                .select("symbol, direction, entry_price, quantity, client_order_id, stop_loss, take_profit_1") \
+                .eq("status", "OPEN") \
+                .eq("execution_mode", "paper") \
+                .execute()
+
+            if res.data:
+                # Group rows by symbol for aggregation
+                agg: Dict[str, Dict] = {}
+                for row in res.data:
+                    symbol = row.get("symbol")
+                    qty    = float(row.get("quantity") or 0)
+                    entry  = float(row.get("entry_price") or 0)
+                    coid   = row.get("client_order_id") or ""
+
+                    if not symbol or qty <= 0 or entry <= 0:
+                        continue
+
+                    if symbol not in agg:
+                        agg[symbol] = {
+                            "total_qty": 0.0,
+                            "weighted_entry": 0.0,
+                            "stop_loss": row.get("stop_loss"),
+                            "take_profit_1": row.get("take_profit_1"),
+                            # Track the LATEST client_order_id for the CLOSE path
+                            "latest_coid": coid,
+                        }
+                    s = agg[symbol]
+                    new_total = s["total_qty"] + qty
+                    s["weighted_entry"] = (
+                        s["weighted_entry"] * s["total_qty"] + entry * qty
+                    ) / new_total if new_total > 0 else entry
+                    s["total_qty"] = new_total
+                    s["latest_coid"] = coid   # last row per symbol wins for close-tracking
+
+                for symbol, s in agg.items():
+                    sl_raw = s["stop_loss"]
+                    tp_raw = s["take_profit_1"]
+                    pos = Position(
+                        symbol=symbol,
+                        direction="LONG",
+                        size=s["total_qty"],
+                        entry_price=s["weighted_entry"],
+                        current_price=s["weighted_entry"],
+                        unrealized_pnl=0.0,
+                        stop_loss=float(sl_raw) if sl_raw else None,
+                        take_profit_levels=[float(tp_raw)] if tp_raw else [],
+                        market=self._market,
+                        exchange="paper",
+                        open_time=time.time(),
+                    )
+                    self._portfolio.positions[symbol] = pos
+
+                    # Re-register client_order_id so the CLOSE path can UPDATE the row
+                    if s["latest_coid"]:
+                        self._open_trade_client_ids[symbol] = s["latest_coid"]
+
+                    logger.info(
+                        "PaperExecutor: restored position %s — qty=%.4f avg_entry=%.4f",
+                        symbol, s["total_qty"], s["weighted_entry"],
+                    )
+
+                # Deduct position notional from capital to avoid double-counting
+                recovered_notional = sum(
+                    p.size * p.entry_price
+                    for p in self._portfolio.positions.values()
+                )
+                # Only deduct if capital hasn't already accounted for open positions
+                # (snapshot.cash should be free cash, so no double-deduction needed)
+                logger.info(
+                    "PaperExecutor: %d open positions restored (notional=$%.2f)",
+                    len(self._portfolio.positions), recovered_notional,
+                )
+        except Exception as exc:
+            logger.warning("PaperExecutor: could not restore open positions: %s", exc)
 
     # ------------------------------------------------------------------
     # Override _close_position to capture realized P&L for DB persistence

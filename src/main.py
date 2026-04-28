@@ -44,7 +44,7 @@ from src.strategies.edge_filter import EdgeFilter
 from src.agents.coordinator import AgentCoordinator
 from src.llm.ensemble import LLMEnsemble
 from src.risk.manager import RiskManager
-from src.execution.engine import ExecutionEngine
+from src.execution.engine import ExecutionEngine, PositionAlreadyOpen
 from src.execution.paper import PaperExecutor
 from src.execution.live import LiveExecutor
 from src.alerts.manager import AlertManager
@@ -590,6 +590,9 @@ class NexusAlpha:
 
         except asyncio.CancelledError:
             raise
+        except PositionAlreadyOpen as exc:
+            # Pyramid guard: already in this position — not an error, just skip
+            logger.debug("Signal pipeline: %s skipped (pyramid guard): %s", key, exc)
         except Exception as exc:
             logger.error(
                 "Error in signal generation for %s: %s", key, exc, exc_info=True

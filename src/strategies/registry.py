@@ -25,25 +25,35 @@ class StrategyRegistry:
 
         strategy_modules = {
             "crypto": [
-                ("src.strategies.crypto.momentum",      "CryptoMomentumStrategy"),
-                ("src.strategies.crypto.mean_reversion","CryptoMeanReversionStrategy"),
+                ("src.strategies.crypto.momentum",          "CryptoMomentumStrategy"),
+                ("src.strategies.crypto.mean_reversion",    "CryptoMeanReversionStrategy"),
+                ("src.strategies.crypto.funding_arb",       "FundingRateArbStrategy"),
+                ("src.strategies.crypto.liquidation_cascade","LiquidationCascadeStrategy"),
                 # Paper-mode trend strategy: fires under normal market conditions
                 # to exercise the full trade pipeline (exec, fees, slippage, DB).
                 *([("src.strategies.crypto.paper_trend", "CryptoPaperTrendStrategy")]
                   if paper_mode else []),
             ],
             "forex": [
-                ("src.strategies.forex.breakout", "BreakoutStrategy"),
-                ("src.strategies.forex.range_trading", "RangeTradingStrategy"),
+                ("src.strategies.forex.breakout",       "ForexBreakoutStrategy"),
+                ("src.strategies.forex.range_trading",  "ForexRangeStrategy"),
+                ("src.strategies.forex.carry_trade",    "CarryTradeStrategy"),
+                ("src.strategies.forex.news_scalp",     "ForexNewsScalpStrategy"),
             ],
             "indian_stocks": [
-                ("src.strategies.indian.gap_trading", "GapTradingStrategy"),
+                ("src.strategies.indian.gap_trading",   "NSEGapTradingStrategy"),
+                ("src.strategies.indian.fii_dii_flow",  "FIIDIIFlowStrategy"),
+                ("src.strategies.indian.option_chain",  "OptionChainStrategy"),
+                ("src.strategies.indian.expiry_day",    "NSEExpiryDayStrategy"),
             ],
             "us_stocks": [
-                ("src.strategies.us.orb", "ORBStrategy"),
+                ("src.strategies.us.orb",              "OpeningRangeBreakoutStrategy"),
+                ("src.strategies.us.earnings_play",    "EarningsPlayStrategy"),
+                ("src.strategies.us.sector_rotation",  "SectorRotationStrategy"),
             ],
             "commodities": [
-                ("src.strategies.commodities.seasonal", "SeasonalStrategy"),
+                ("src.strategies.commodities.seasonal",  "CommoditySeasonalStrategy"),
+                ("src.strategies.commodities.contango",  "ContangoBackwardationStrategy"),
             ],
         }
 

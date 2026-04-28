@@ -85,12 +85,39 @@ def _float_env(key: str, default: float) -> float:
 
 
 def _build_default_markets() -> Dict[str, MarketConfig]:
-    """Build the default enabled markets (crypto only)."""
+    """Build the default enabled markets (crypto only for paper trading).
+
+    Symbols sourced from env vars so VPS .env can override without code changes:
+      CRYPTO_SYMBOLS  = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,DOGE/USDT"
+      CRYPTO_TIMEFRAMES = "15m,1h,4h"
+    """
+    default_crypto_symbols = [
+        "BTC/USDT",
+        "ETH/USDT",
+        "SOL/USDT",
+        "BNB/USDT",
+        "XRP/USDT",
+        "DOGE/USDT",
+    ]
+    crypto_symbols_env = os.getenv("CRYPTO_SYMBOLS", "")
+    crypto_symbols = (
+        [s.strip() for s in crypto_symbols_env.split(",") if s.strip()]
+        if crypto_symbols_env
+        else default_crypto_symbols
+    )
+
+    crypto_tfs_env = os.getenv("CRYPTO_TIMEFRAMES", "")
+    crypto_timeframes = (
+        [t.strip() for t in crypto_tfs_env.split(",") if t.strip()]
+        if crypto_tfs_env
+        else ["15m", "1h", "4h"]
+    )
+
     return {
         "crypto": MarketConfig(
             name="crypto",
-            symbols=["BTC/USDT", "ETH/USDT"],
-            timeframes=["15m", "1h", "4h"],
+            symbols=crypto_symbols,
+            timeframes=crypto_timeframes,
             enabled=True,
         )
     }

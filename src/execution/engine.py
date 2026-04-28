@@ -15,6 +15,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+class PositionAlreadyOpen(Exception):
+    """Raised when a signal would open a duplicate position (pyramid guard)."""
+
+
 @dataclass
 class ExecutionHealth:
     """Health snapshot for the execution engine."""
@@ -99,6 +103,44 @@ class ExecutionEngine:
         market = getattr(signal, "market", "crypto")
         direction_raw = getattr(signal, "direction", "NEUTRAL")
         direction = str(direction_raw.value if hasattr(direction_raw, "value") else direction_raw)
+
+        # ------------------------------------------------------------------
+        # Position Deduplication Guard
+        # ------------------------------------------------------------------
+        # Prevent unlimited pyramiding: skip new orders when we already hold
+        # this symbol on the same side.  MAX_PYRAMID_DEPTH=1 means no pyramid
+        # (default); increase via settings.max_pyramid_depth to allow stacking.
+        _max_pyramid = int(getattr(self._settings, "max_pyramid_depth", 1))
+        if _max_pyramid <= 1:
+            try:
+                _portfolio = self._executor.get_portfolio_state()
+                _existing = getattr(_portfolio, "positions", {}).get(symbol)
+                if _existing is not None:
+                    _pos_dir = str(getattr(_existing, "direction", "")).upper()
+                    _sig_dir = direction.upper()
+                    _same_side = (
+                        (_sig_dir in ("BUY", "LONG") and _pos_dir in ("BUY", "LONG"))
+                        or (_sig_dir in ("SELL", "SHORT") and _pos_dir in ("SELL", "SHORT"))
+                    )
+                    if _same_side:
+                        logger.info(
+                            "ExecutionEngine: SKIPPING %s %s — already in %s position "
+                            "(pyramid depth=%d, guard active)",
+                            direction, symbol, _pos_dir, _max_pyramid,
+                        )
+                        raise PositionAlreadyOpen(
+                            f"Already holding {_pos_dir} {symbol}; pyramid guard active "
+                            f"(max_pyramid_depth={_max_pyramid})"
+                        )
+            except PositionAlreadyOpen:
+                raise  # re-raise so caller can handle cleanly
+            except Exception as _guard_exc:
+                # Non-fatal: if we can't check the portfolio, proceed and let
+                # the executor deal with it (worst case: small pyramid).
+                logger.debug(
+                    "ExecutionEngine: pyramid guard check failed (non-fatal): %s", _guard_exc
+                )
+        # ------------------------------------------------------------------
 
         # Get risk-adjusted position size
         position_size_fraction = (
