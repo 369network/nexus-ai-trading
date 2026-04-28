@@ -3,10 +3,25 @@
 
 Stores prediction confidence and actual outcomes, computes per-model/per-market
 Brier scores, and exposes the best-performing model for each market.
+
+Persistence model
+-----------------
+* Sync path  (_persist_prediction / _persist_outcome / load_from_supabase):
+  kept intact but only active when the caller supplies a *sync* supabase client.
+  These paths are currently unused — kept for backwards compat.
+
+* Async path (_persist_prediction_async / _persist_outcome_async /
+  load_from_supabase_async): used by main.py which runs inside an async event
+  loop and holds an async PostgREST client (supabase-py >= 2.x).
+
+  record_prediction() and record_outcome() detect whether an event loop is
+  running and fire asyncio.ensure_future() for the async persist so the hot
+  path is never blocked.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -58,8 +73,8 @@ class BrierTracker:
         Parameters
         ----------
         supabase_client:
-            Optional Supabase client for persisting records.  If None, data
-            is held in-memory only (useful for testing).
+            Optional async Supabase client (supabase-py >= 2.x) for persisting
+            records.  If None, data is held in-memory only (useful for testing).
         """
         self._supabase = supabase_client
         self._predictions: List[PredictionRecord] = []
@@ -89,7 +104,15 @@ class BrierTracker:
             timestamp=ts,
         )
         self._predictions.append(record)
-        self._persist_prediction(record)
+
+        # Fire async persist if we are inside a running event loop
+        if self._supabase is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._persist_prediction_async(record))
+            except RuntimeError:
+                # No running loop — fall back to sync (legacy path)
+                self._persist_prediction(record)
 
     def record_outcome(
         self,
@@ -109,7 +132,13 @@ class BrierTracker:
             timestamp=ts,
         )
         self._outcomes.append(record)
-        self._persist_outcome(record)
+
+        if self._supabase is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._persist_outcome_async(record))
+            except RuntimeError:
+                self._persist_outcome(record)
 
     # ------------------------------------------------------------------
     # Brier score computation
@@ -247,10 +276,104 @@ class BrierTracker:
         return matched
 
     # ------------------------------------------------------------------
-    # Persistence (Supabase)
+    # Async persistence (primary path — supabase-py >= 2.x async client)
+    # ------------------------------------------------------------------
+
+    async def _persist_prediction_async(self, record: PredictionRecord) -> None:
+        """Persist a prediction record to Supabase (async)."""
+        if self._supabase is None:
+            return
+        try:
+            await (
+                self._supabase
+                .table("model_performance")
+                .insert({
+                    "record_type": "prediction",
+                    "model": record.model,
+                    "market": record.market,
+                    "symbol": record.symbol,
+                    "direction": record.direction,
+                    "confidence": record.confidence,
+                    "timestamp": record.timestamp.isoformat(),
+                })
+                .execute()
+            )
+        except Exception as exc:
+            logger.debug("BrierTracker: async prediction persist failed: %s", exc)
+
+    async def _persist_outcome_async(self, record: OutcomeRecord) -> None:
+        """Persist an outcome record to Supabase (async)."""
+        if self._supabase is None:
+            return
+        try:
+            await (
+                self._supabase
+                .table("model_performance")
+                .insert({
+                    "record_type": "outcome",
+                    "model": record.model,
+                    "market": record.market,
+                    "symbol": record.symbol,
+                    "actual_direction": record.actual_direction,
+                    "timestamp": record.timestamp.isoformat(),
+                })
+                .execute()
+            )
+        except Exception as exc:
+            logger.debug("BrierTracker: async outcome persist failed: %s", exc)
+
+    async def load_from_supabase_async(self, window_days: int = 90) -> None:
+        """Populate in-memory records from Supabase for the given window (async)."""
+        if self._supabase is None:
+            return
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=window_days)
+        try:
+            result = await (
+                self._supabase
+                .table("model_performance")
+                .select("*")
+                .gte("timestamp", cutoff.isoformat())
+                .execute()
+            )
+            loaded_preds = 0
+            loaded_outcomes = 0
+            for row in result.data:
+                if row["record_type"] == "prediction":
+                    self._predictions.append(PredictionRecord(
+                        model=row["model"],
+                        market=row["market"],
+                        symbol=row["symbol"],
+                        direction=row["direction"],
+                        confidence=row["confidence"],
+                        timestamp=datetime.fromisoformat(row["timestamp"]),
+                    ))
+                    loaded_preds += 1
+                elif row["record_type"] == "outcome":
+                    self._outcomes.append(OutcomeRecord(
+                        model=row["model"],
+                        market=row["market"],
+                        symbol=row["symbol"],
+                        actual_direction=row["actual_direction"],
+                        timestamp=datetime.fromisoformat(row["timestamp"]),
+                    ))
+                    loaded_outcomes += 1
+            logger.info(
+                "BrierTracker: loaded %d predictions + %d outcomes from Supabase",
+                loaded_preds, loaded_outcomes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "BrierTracker: async load from Supabase failed (will run in-memory): %s",
+                exc,
+            )
+
+    # ------------------------------------------------------------------
+    # Sync persistence (legacy / no-event-loop fallback)
     # ------------------------------------------------------------------
 
     def _persist_prediction(self, record: PredictionRecord) -> None:
+        """Persist a prediction record to Supabase (sync — legacy path)."""
         if self._supabase is None:
             return
         try:
@@ -264,9 +387,10 @@ class BrierTracker:
                 "timestamp": record.timestamp.isoformat(),
             }).execute()
         except Exception as exc:
-            logger.error("Failed to persist prediction to Supabase: %s", exc)
+            logger.error("BrierTracker: sync prediction persist failed: %s", exc)
 
     def _persist_outcome(self, record: OutcomeRecord) -> None:
+        """Persist an outcome record to Supabase (sync — legacy path)."""
         if self._supabase is None:
             return
         try:
@@ -279,10 +403,13 @@ class BrierTracker:
                 "timestamp": record.timestamp.isoformat(),
             }).execute()
         except Exception as exc:
-            logger.error("Failed to persist outcome to Supabase: %s", exc)
+            logger.error("BrierTracker: sync outcome persist failed: %s", exc)
 
     def load_from_supabase(self, window_days: int = 90) -> None:
-        """Populate in-memory records from Supabase for the given window."""
+        """Populate in-memory records from Supabase for the given window (sync).
+
+        Deprecated: prefer load_from_supabase_async() inside an async context.
+        """
         if self._supabase is None:
             return
 
@@ -314,8 +441,8 @@ class BrierTracker:
                         timestamp=datetime.fromisoformat(row["timestamp"]),
                     ))
             logger.info(
-                "Loaded %d predictions and %d outcomes from Supabase",
+                "BrierTracker: loaded %d predictions and %d outcomes from Supabase (sync)",
                 len(self._predictions), len(self._outcomes),
             )
         except Exception as exc:
-            logger.error("Failed to load BrierTracker data from Supabase: %s", exc)
+            logger.error("BrierTracker: sync load from Supabase failed: %s", exc)

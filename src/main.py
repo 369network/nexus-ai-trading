@@ -340,11 +340,17 @@ class NexusAlpha:
         self.regime_adapter = RegimeAdapter()
         logger.info("AutoCalibrator + RegimeAdapter initialised")
 
-        # BrierTracker: per-model calibration scoring (in-memory; supabase client
-        # uses async execute() which is incompatible with BrierTracker's sync API —
-        # in-memory mode still gives accurate within-session Brier scores)
-        self.brier_tracker = BrierTracker(supabase_client=None)
-        logger.info("BrierTracker initialised (in-memory mode)")
+        # BrierTracker: per-model calibration scoring.
+        # Pass the async supabase client so predictions/outcomes are persisted
+        # across restarts.  load_from_supabase_async() pre-seeds in-memory state
+        # from the last 90 days of the model_performance table.
+        _brier_client = getattr(self.db, "client", None)
+        self.brier_tracker = BrierTracker(supabase_client=_brier_client)
+        try:
+            await self.brier_tracker.load_from_supabase_async()
+        except Exception as _be:
+            logger.warning("BrierTracker: seed from Supabase failed — running in-memory: %s", _be)
+        logger.info("BrierTracker initialised (supabase_client=%s)", "connected" if _brier_client else "None")
 
         await self.dream_scheduler.init()
         await self.memory_updater.init()
