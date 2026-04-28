@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Settings,
@@ -14,9 +14,147 @@ import {
   FlaskConical,
   Sliders,
   Shield,
+  Key,
+  Eye,
+  EyeOff,
+  Save,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Zap,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { cn, formatTimeAgo } from '@/lib/utils';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ApiServiceConfig {
+  id: string;
+  name: string;
+  type: 'Exchange' | 'Broker' | 'Data';
+  description: string;
+  docsUrl: string;
+  fields: { key: string; label: string; placeholder: string; secret?: boolean }[];
+  testEndpoint?: string; // public URL to ping for latency
+  color: string;
+}
+
+interface SavedApiKeys {
+  [serviceId: string]: { [fieldKey: string]: string };
+}
+
+interface ConnectionStatus {
+  status: 'connected' | 'error' | 'untested' | 'testing';
+  ping?: number;
+  lastTested?: string;
+  message?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Service Definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+const API_SERVICES: ApiServiceConfig[] = [
+  {
+    id: 'binance',
+    name: 'Binance',
+    type: 'Exchange',
+    description: 'Spot & futures trading. Required for crypto markets.',
+    docsUrl: 'https://www.binance.com/en/my/settings/api-management',
+    color: '#F0B90B',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter Binance API Key...' },
+      { key: 'api_secret', label: 'API Secret', placeholder: 'Enter Binance API Secret...', secret: true },
+    ],
+    testEndpoint: 'https://api.binance.com/api/v3/ping',
+  },
+  {
+    id: 'coinbase',
+    name: 'Coinbase Advanced',
+    type: 'Exchange',
+    description: 'Coinbase Advanced Trade API for spot trading.',
+    docsUrl: 'https://www.coinbase.com/settings/api',
+    color: '#0052FF',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter Coinbase API Key...' },
+      { key: 'api_secret', label: 'API Secret', placeholder: 'Enter Coinbase API Secret...', secret: true },
+    ],
+    testEndpoint: 'https://api.coinbase.com/api/v3/brokerage/products',
+  },
+  {
+    id: 'interactive_brokers',
+    name: 'Interactive Brokers',
+    type: 'Broker',
+    description: 'IB TWS/Gateway for US stocks, options, futures.',
+    docsUrl: 'https://www.interactivebrokers.com/en/trading/ib-api.php',
+    color: '#CC0000',
+    fields: [
+      { key: 'account_id', label: 'Account ID', placeholder: 'e.g. U12345678' },
+      { key: 'gateway_host', label: 'Gateway Host', placeholder: 'e.g. localhost or 127.0.0.1' },
+      { key: 'gateway_port', label: 'Gateway Port', placeholder: 'e.g. 7497 (paper) or 7496 (live)' },
+    ],
+  },
+  {
+    id: 'zerodha',
+    name: 'Zerodha Kite',
+    type: 'Broker',
+    description: 'Kite Connect API for Indian equity markets (NSE/BSE).',
+    docsUrl: 'https://kite.trade/docs/connect/v3/',
+    color: '#387ED1',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter Kite Connect API Key...' },
+      { key: 'api_secret', label: 'API Secret', placeholder: 'Enter Kite Connect API Secret...', secret: true },
+      { key: 'access_token', label: 'Access Token', placeholder: 'Daily access token (refreshed via login)...', secret: true },
+    ],
+    testEndpoint: 'https://api.kite.trade/instruments/NSE',
+  },
+  {
+    id: 'alpha_vantage',
+    name: 'Alpha Vantage',
+    type: 'Data',
+    description: 'Stock fundamentals, forex, and economic indicators.',
+    docsUrl: 'https://www.alphavantage.co/support/#api-key',
+    color: '#5BA65B',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter Alpha Vantage API Key...' },
+    ],
+    testEndpoint: 'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=IBM&interval=1min&apikey=demo',
+  },
+  {
+    id: 'newsapi',
+    name: 'NewsAPI',
+    type: 'Data',
+    description: 'Real-time news sentiment for NLP signal analysis.',
+    docsUrl: 'https://newsapi.org/account',
+    color: '#6B46C1',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter NewsAPI Key...' },
+    ],
+    testEndpoint: 'https://newsapi.org/v2/top-headlines?country=us&apiKey=demo',
+  },
+  {
+    id: 'glassnode',
+    name: 'Glassnode',
+    type: 'Data',
+    description: 'On-chain crypto analytics for whale and network signals.',
+    docsUrl: 'https://studio.glassnode.com/settings/api',
+    color: '#FF6B00',
+    fields: [
+      { key: 'api_key', label: 'API Key', placeholder: 'Enter Glassnode API Key...' },
+    ],
+    testEndpoint: 'https://api.glassnode.com/v1/metrics/market/price_usd_close?a=BTC',
+  },
+];
+
+const STORAGE_KEY = 'nexus_api_keys';
+const STATUS_STORAGE_KEY = 'nexus_api_status';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature Flags
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface FeatureFlag {
   key: string;
@@ -68,15 +206,9 @@ const CIRCUIT_THRESHOLDS = [
   { key: 'vix_threshold', label: 'VIX Spike Threshold', value: 35.0, step: 1.0 },
 ];
 
-const API_CONNECTIONS = [
-  { name: 'Binance', type: 'Exchange', status: 'connected', ping: 42, lastPing: new Date().toISOString() },
-  { name: 'Coinbase', type: 'Exchange', status: 'connected', ping: 87, lastPing: new Date().toISOString() },
-  { name: 'Interactive Brokers', type: 'Broker', status: 'connected', ping: 124, lastPing: new Date().toISOString() },
-  { name: 'Zerodha Kite', type: 'Broker', status: 'connected', ping: 211, lastPing: new Date().toISOString() },
-  { name: 'Alpha Vantage', type: 'Data', status: 'error', ping: 0, lastPing: new Date(Date.now() - 300000).toISOString() },
-  { name: 'NewsAPI', type: 'Data', status: 'connected', ping: 178, lastPing: new Date().toISOString() },
-  { name: 'Glassnode', type: 'Data', status: 'connected', ping: 234, lastPing: new Date().toISOString() },
-];
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
 
 function ToggleSwitch({
   checked,
@@ -102,10 +234,7 @@ function ToggleSwitch({
       )}
     >
       <span
-        className={cn(
-          'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-sm',
-          checked ? 'translate-x-4.5' : 'translate-x-0.5'
-        )}
+        className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-sm"
         style={{ transform: checked ? 'translateX(20px)' : 'translateX(2px)' }}
       />
     </button>
@@ -114,12 +243,10 @@ function ToggleSwitch({
 
 function EmergencyStopDialog() {
   const [open, setOpen] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
   const [input, setInput] = useState('');
 
   const handleStop = () => {
     if (input === 'STOP') {
-      // In production: call emergency stop API
       console.log('EMERGENCY STOP TRIGGERED');
       setOpen(false);
       setInput('');
@@ -142,17 +269,8 @@ function EmergencyStopDialog() {
             Emergency Stop
           </Dialog.Title>
           <Dialog.Description className="text-sm text-gray-300 mb-4">
-            This will immediately close all open positions and halt all trading activity. This action cannot be undone.
+            This will immediately halt all trading activity. This action cannot be undone.
           </Dialog.Description>
-          <div className="bg-nexus-red/5 border border-nexus-red/20 rounded-lg p-3 mb-4">
-            <p className="text-xs text-nexus-red font-medium">This will:</p>
-            <ul className="text-xs text-gray-300 mt-1 space-y-1">
-              <li>• Close all {4} open positions at market price</li>
-              <li>• Cancel all pending orders</li>
-              <li>• Halt the trading engine</li>
-              <li>• Trigger all circuit breakers</li>
-            </ul>
-          </div>
           <div className="mb-4">
             <label className="text-xs text-muted block mb-1">Type STOP to confirm:</label>
             <input
@@ -188,10 +306,8 @@ function PaperModeToggle() {
 
   const handleToggle = () => {
     if (systemStatus.paper_mode) {
-      // Going live - need confirmation
       setOpen(true);
     } else {
-      // Going to paper - safe to do immediately
       updateSystemStatus({ paper_mode: true });
     }
   };
@@ -224,10 +340,7 @@ function PaperModeToggle() {
             </div>
           </div>
         </div>
-        <ToggleSwitch
-          checked={!systemStatus.paper_mode}
-          onChange={handleToggle}
-        />
+        <ToggleSwitch checked={!systemStatus.paper_mode} onChange={handleToggle} />
       </div>
 
       <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -241,12 +354,6 @@ function PaperModeToggle() {
             <Dialog.Description className="text-sm text-gray-300 mb-4">
               You are about to switch from paper trading to live trading. Real money will be used for all trades.
             </Dialog.Description>
-            <div className="bg-nexus-yellow/5 border border-nexus-yellow/20 rounded-lg p-3 mb-4 text-xs text-gray-300 space-y-1">
-              <p>• Verify all API keys are configured</p>
-              <p>• Confirm risk limits are set appropriately</p>
-              <p>• Ensure sufficient capital is allocated</p>
-              <p>• All circuit breakers will reset</p>
-            </div>
             <div className="flex gap-3">
               <Dialog.Close asChild>
                 <button className="flex-1 py-2 px-4 bg-border text-white rounded-lg text-sm hover:bg-border-bright transition-colors">
@@ -267,28 +374,315 @@ function PaperModeToggle() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// API Connection Card with inline key management
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ApiConnectionCard({
+  service,
+  savedKeys,
+  status,
+  onSave,
+  onTest,
+}: {
+  service: ApiServiceConfig;
+  savedKeys: Record<string, string>;
+  status: ConnectionStatus;
+  onSave: (serviceId: string, keys: Record<string, string>) => void;
+  onTest: (service: ApiServiceConfig, keys: Record<string, string>) => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [draftKeys, setDraftKeys] = useState<Record<string, string>>({});
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  const [testing, setTesting] = useState(false);
+
+  // When saved keys change (initial load), sync draft
+  useEffect(() => {
+    setDraftKeys({ ...savedKeys });
+  }, [savedKeys]);
+
+  const hasKeys = Object.values(savedKeys).some((v) => v && v.length > 0);
+  const draftChanged = service.fields.some((f) => draftKeys[f.key] !== savedKeys[f.key]);
+  const draftHasKeys = Object.values(draftKeys).some((v) => v && v.length > 0);
+
+  const handleSave = () => {
+    onSave(service.id, draftKeys);
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    await onTest(service, draftKeys);
+    setTesting(false);
+  };
+
+  const statusIcon = () => {
+    if (testing || status.status === 'testing') return <Loader2 size={13} className="text-nexus-blue animate-spin" />;
+    if (!hasKeys) return <WifiOff size={13} className="text-gray-500" />;
+    if (status.status === 'connected') return <Wifi size={13} className="text-nexus-green" />;
+    if (status.status === 'error') return <XCircle size={13} className="text-nexus-red" />;
+    return <Wifi size={13} className="text-gray-500" />;
+  };
+
+  const statusBorder = () => {
+    if (!hasKeys) return 'border-border';
+    if (status.status === 'connected') return 'border-nexus-green/30';
+    if (status.status === 'error') return 'border-nexus-red/30';
+    return 'border-border';
+  };
+
+  const statusBg = () => {
+    if (!hasKeys) return '';
+    if (status.status === 'connected') return 'bg-nexus-green/5';
+    if (status.status === 'error') return 'bg-nexus-red/5';
+    return '';
+  };
+
+  return (
+    <div className={cn('rounded-xl border transition-all duration-200', statusBorder(), statusBg())}>
+      {/* Header row */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between p-3 hover:bg-white/5 rounded-xl transition-colors"
+      >
+        <div className="flex items-center gap-2.5 text-left">
+          {/* Color dot */}
+          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: service.color }} />
+          <div>
+            <div className="text-sm font-semibold text-white leading-tight">{service.name}</div>
+            <div className="text-xs text-muted">{service.type}</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Status */}
+          <div className="flex items-center gap-1.5">
+            {statusIcon()}
+            <span className="text-xs font-mono text-muted hidden sm:inline">
+              {testing || status.status === 'testing' ? 'Testing...' :
+               !hasKeys ? 'No key' :
+               status.status === 'connected' ? `${status.ping ?? '?'}ms` :
+               status.status === 'error' ? 'Error' : 'Untested'}
+            </span>
+          </div>
+          {/* Expand */}
+          {expanded ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
+        </div>
+      </button>
+
+      {/* Expanded config panel */}
+      {expanded && (
+        <div className="px-3 pb-3 border-t border-border/50 pt-3 space-y-3">
+          <div className="text-xs text-muted mb-2">{service.description}</div>
+
+          {/* Fields */}
+          {service.fields.map((field) => (
+            <div key={field.key}>
+              <label className="text-xs text-gray-400 block mb-1">{field.label}</label>
+              <div className="relative">
+                <input
+                  type={field.secret && !showSecrets[field.key] ? 'password' : 'text'}
+                  value={draftKeys[field.key] ?? ''}
+                  onChange={(e) =>
+                    setDraftKeys((prev) => ({ ...prev, [field.key]: e.target.value }))
+                  }
+                  placeholder={field.placeholder}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-white text-xs font-mono focus:outline-none focus:border-nexus-blue pr-8"
+                />
+                {field.secret && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowSecrets((prev) => ({ ...prev, [field.key]: !prev[field.key] }))
+                    }
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-white"
+                  >
+                    {showSecrets[field.key] ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {/* Key indicator */}
+          {hasKeys && (
+            <div className="flex items-center gap-1.5 text-xs text-nexus-green">
+              <CheckCircle2 size={11} />
+              <span>API key saved</span>
+              {status.status === 'connected' && status.lastTested && (
+                <span className="text-muted">· tested {formatTimeAgo(status.lastTested)}</span>
+              )}
+            </div>
+          )}
+
+          {/* Action row */}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={handleSave}
+              disabled={!draftChanged && hasKeys}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                draftChanged || !hasKeys
+                  ? 'bg-nexus-blue/10 text-nexus-blue border border-nexus-blue/20 hover:bg-nexus-blue/20'
+                  : 'bg-border text-muted cursor-not-allowed opacity-50'
+              )}
+            >
+              <Save size={12} />
+              {hasKeys && !draftChanged ? 'Saved' : 'Save Keys'}
+            </button>
+
+            <button
+              onClick={handleTest}
+              disabled={testing || !draftHasKeys}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                draftHasKeys
+                  ? 'bg-nexus-green/10 text-nexus-green border border-nexus-green/20 hover:bg-nexus-green/20'
+                  : 'bg-border text-muted cursor-not-allowed opacity-50'
+              )}
+            >
+              {testing ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+              Test Connection
+            </button>
+
+            <a
+              href={service.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto flex items-center gap-1 text-xs text-muted hover:text-white transition-colors"
+            >
+              Get API Key
+              <ExternalLink size={11} />
+            </a>
+          </div>
+
+          {/* Error message */}
+          {status.status === 'error' && status.message && (
+            <div className="text-xs text-nexus-red bg-nexus-red/5 border border-nexus-red/20 rounded-lg px-2 py-1.5">
+              {status.message}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Settings Page
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
   const [flags, setFlags] = useState(FEATURE_FLAGS);
   const [weights, setWeights] = useState(LLM_WEIGHTS);
   const [limits, setLimits] = useState(RISK_LIMITS);
   const [thresholds, setThresholds] = useState(CIRCUIT_THRESHOLDS);
 
+  // API Keys state (loaded from localStorage)
+  const [savedKeys, setSavedKeys] = useState<SavedApiKeys>({});
+  const [statuses, setStatuses] = useState<Record<string, ConnectionStatus>>(() =>
+    API_SERVICES.reduce((acc, s) => ({ ...acc, [s.id]: { status: 'untested' as const } }), {})
+  );
+  const [saveNotice, setSaveNotice] = useState('');
+
+  // Load keys from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) setSavedKeys(JSON.parse(raw));
+
+      const statusRaw = localStorage.getItem(STATUS_STORAGE_KEY);
+      if (statusRaw) {
+        const saved = JSON.parse(statusRaw) as Record<string, ConnectionStatus>;
+        setStatuses((prev) => {
+          const merged = { ...prev };
+          for (const [id, s] of Object.entries(saved)) {
+            merged[id] = s;
+          }
+          return merged;
+        });
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, []);
+
+  const handleSaveKeys = useCallback((serviceId: string, keys: Record<string, string>) => {
+    setSavedKeys((prev) => {
+      const next = { ...prev, [serviceId]: keys };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    setSaveNotice('Keys saved locally (browser only — never sent to any server)');
+    setTimeout(() => setSaveNotice(''), 4000);
+  }, []);
+
+  const handleTestConnection = useCallback(async (service: ApiServiceConfig, keys: Record<string, string>) => {
+    setStatuses((prev) => ({ ...prev, [service.id]: { status: 'testing' } }));
+
+    const t0 = Date.now();
+    try {
+      if (service.testEndpoint) {
+        const res = await fetch(service.testEndpoint, {
+          method: 'GET',
+          signal: AbortSignal.timeout(8000),
+        });
+        const ping = Date.now() - t0;
+        const ok = res.ok || res.status === 400; // some endpoints return 400 with valid keys
+        const newStatus: ConnectionStatus = {
+          status: ok ? 'connected' : 'error',
+          ping: ok ? ping : undefined,
+          lastTested: new Date().toISOString(),
+          message: ok ? undefined : `HTTP ${res.status}`,
+        };
+        setStatuses((prev) => {
+          const next = { ...prev, [service.id]: newStatus };
+          try { localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+          return next;
+        });
+      } else {
+        // No test endpoint — just mark as configured
+        const newStatus: ConnectionStatus = {
+          status: 'connected',
+          ping: undefined,
+          lastTested: new Date().toISOString(),
+          message: 'Connection cannot be tested from browser — keys saved for bot use.',
+        };
+        setStatuses((prev) => {
+          const next = { ...prev, [service.id]: newStatus };
+          try { localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+          return next;
+        });
+      }
+    } catch (err: unknown) {
+      const ping = Date.now() - t0;
+      const message = err instanceof Error ? err.message : 'Connection failed';
+      const newStatus: ConnectionStatus = {
+        status: 'error',
+        lastTested: new Date().toISOString(),
+        message,
+      };
+      setStatuses((prev) => {
+        const next = { ...prev, [service.id]: newStatus };
+        try { localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
+    }
+  }, []);
+
   const toggleFlag = (key: string) => {
     setFlags((prev) => prev.map((f) => f.key === key ? { ...f, value: !f.value } : f));
   };
-
   const updateWeight = (agent: string, weight: number) => {
     setWeights((prev) => prev.map((w) => w.agent === agent ? { ...w, weight } : w));
   };
-
   const resetWeightsToOptimal = () => {
     setWeights((prev) => prev.map((w) => ({ ...w, weight: w.optimal })));
   };
-
   const updateLimit = (key: string, value: number) => {
     setLimits((prev) => prev.map((l) => l.key === key ? { ...l, value } : l));
   };
-
   const updateThreshold = (key: string, value: number) => {
     setThresholds((prev) => prev.map((t) => t.key === key ? { ...t, value } : t));
   };
@@ -299,9 +693,13 @@ export default function SettingsPage() {
     return acc;
   }, {} as Record<string, FeatureFlag[]>);
 
+  // Summary counts
+  const connectedCount = Object.values(statuses).filter((s) => s.status === 'connected').length;
+  const configuredCount = Object.values(savedKeys).filter((v) => Object.values(v).some((k) => k?.length > 0)).length;
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Paper Mode Toggle - most prominent */}
+      {/* Paper Mode Toggle */}
       <PaperModeToggle />
 
       <div className="grid grid-cols-2 gap-6">
@@ -311,7 +709,6 @@ export default function SettingsPage() {
             <Settings size={16} className="text-nexus-blue" />
             <h2 className="font-semibold text-white">Feature Flags</h2>
           </div>
-
           <div className="space-y-5">
             {Object.entries(flagsByCategory).map(([category, categoryFlags]) => (
               <div key={category}>
@@ -323,10 +720,7 @@ export default function SettingsPage() {
                         <div className="text-sm font-medium text-white">{flag.label}</div>
                         <div className="text-xs text-muted">{flag.description}</div>
                       </div>
-                      <ToggleSwitch
-                        checked={flag.value}
-                        onChange={() => toggleFlag(flag.key)}
-                      />
+                      <ToggleSwitch checked={flag.value} onChange={() => toggleFlag(flag.key)} />
                     </div>
                   ))}
                 </div>
@@ -335,7 +729,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* LLM Weights */}
+        {/* Right column: LLM Weights + Risk Limits */}
         <div className="space-y-4">
           <div className="nexus-card p-5">
             <div className="flex items-center justify-between mb-5">
@@ -351,7 +745,6 @@ export default function SettingsPage() {
                 Reset to Brier-Optimal
               </button>
             </div>
-
             <div className="space-y-4">
               {weights.map((w) => (
                 <div key={w.agent}>
@@ -363,16 +756,10 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <input
-                    type="range"
-                    min={0.1}
-                    max={1.0}
-                    step={0.01}
-                    value={w.weight}
+                    type="range" min={0.1} max={1.0} step={0.01} value={w.weight}
                     onChange={(e) => updateWeight(w.agent, parseFloat(e.target.value))}
                     className="w-full h-1.5 bg-border rounded-full appearance-none cursor-pointer"
-                    style={{
-                      background: `linear-gradient(to right, #0088ff ${w.weight * 100}%, #1e1e2e ${w.weight * 100}%)`,
-                    }}
+                    style={{ background: `linear-gradient(to right, #0088ff ${w.weight * 100}%, #1e1e2e ${w.weight * 100}%)` }}
                   />
                   <div className="flex justify-between text-xs text-muted mt-0.5">
                     <span>0.1</span>
@@ -386,7 +773,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Risk Limits */}
           <div className="nexus-card p-5">
             <div className="flex items-center gap-2 mb-4">
               <Shield size={16} className="text-nexus-yellow" />
@@ -398,10 +784,7 @@ export default function SettingsPage() {
                   <label className="text-xs text-gray-300 flex-1">{limit.label}</label>
                   <div className="flex items-center gap-2">
                     <input
-                      type="number"
-                      value={limit.value}
-                      min={limit.min}
-                      max={limit.max}
+                      type="number" value={limit.value} min={limit.min} max={limit.max}
                       onChange={(e) => updateLimit(limit.key, parseFloat(e.target.value))}
                       className="w-16 bg-background border border-border rounded px-2 py-1 text-white text-sm font-mono text-center focus:outline-none focus:border-nexus-blue"
                     />
@@ -428,61 +811,67 @@ export default function SettingsPage() {
                 <button
                   onClick={() => updateThreshold(t.key, Math.max(0, +(t.value - t.step).toFixed(2)))}
                   className="w-6 h-6 rounded bg-border text-white text-xs hover:bg-border-bright transition-colors"
-                >
-                  -
-                </button>
+                >-</button>
                 <span className="font-mono text-white text-sm w-12 text-center">
                   {t.value.toFixed(t.step < 1 ? 2 : 1)}
                 </span>
                 <button
                   onClick={() => updateThreshold(t.key, +(t.value + t.step).toFixed(2))}
                   className="w-6 h-6 rounded bg-border text-white text-xs hover:bg-border-bright transition-colors"
-                >
-                  +
-                </button>
+                >+</button>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* API Connections */}
+      {/* ── API Connections (full key management) ── */}
       <div className="nexus-card p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Wifi size={16} className="text-nexus-green" />
-          <h2 className="font-semibold text-white">API Connections</h2>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <Key size={16} className="text-nexus-blue" />
+            <h2 className="font-semibold text-white">API Connections</h2>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted">
+              {configuredCount}/{API_SERVICES.length} configured
+              {connectedCount > 0 && ` · ${connectedCount} tested`}
+            </span>
+          </div>
         </div>
-        <div className="grid grid-cols-4 gap-3">
-          {API_CONNECTIONS.map((api) => (
-            <div
-              key={api.name}
-              className={cn(
-                'p-3 rounded-lg border',
-                api.status === 'connected'
-                  ? 'border-nexus-green/20 bg-nexus-green/5'
-                  : 'border-nexus-red/30 bg-nexus-red/5'
-              )}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-white">{api.name}</span>
-                {api.status === 'connected' ? (
-                  <Wifi size={12} className="text-nexus-green" />
-                ) : (
-                  <WifiOff size={12} className="text-nexus-red" />
-                )}
-              </div>
-              <div className="text-xs text-muted">{api.type}</div>
-              {api.status === 'connected' ? (
-                <div className="text-xs text-nexus-green mt-1">
-                  {api.ping}ms latency
-                </div>
-              ) : (
-                <div className="text-xs text-nexus-red mt-1">
-                  Last seen: {formatTimeAgo(api.lastPing)}
-                </div>
-              )}
-            </div>
+
+        <p className="text-xs text-muted mb-4">
+          API keys are stored only in your browser (localStorage). They are never sent to any server.
+          Click any service to expand and enter your credentials.
+        </p>
+
+        {saveNotice && (
+          <div className="flex items-center gap-2 text-xs text-nexus-green bg-nexus-green/5 border border-nexus-green/20 rounded-lg px-3 py-2 mb-3">
+            <CheckCircle2 size={12} />
+            {saveNotice}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-2">
+          {API_SERVICES.map((service) => (
+            <ApiConnectionCard
+              key={service.id}
+              service={service}
+              savedKeys={savedKeys[service.id] ?? {}}
+              status={statuses[service.id] ?? { status: 'untested' }}
+              onSave={handleSaveKeys}
+              onTest={handleTestConnection}
+            />
           ))}
+        </div>
+
+        <div className="mt-4 p-3 bg-nexus-yellow/5 border border-nexus-yellow/20 rounded-lg">
+          <p className="text-xs text-nexus-yellow font-medium mb-1">⚠ For live trading, also configure keys on the VPS</p>
+          <p className="text-xs text-muted">
+            Dashboard keys are for reference only. The trading bot reads its keys from{' '}
+            <code className="font-mono bg-background px-1 py-0.5 rounded">/opt/nexus-alpha/.env</code>{' '}
+            on the VPS. Update that file to activate keys for live execution.
+          </p>
         </div>
       </div>
 
