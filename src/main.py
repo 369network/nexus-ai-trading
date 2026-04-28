@@ -129,6 +129,9 @@ class NexusAlpha:
         self._shutdown_event: asyncio.Event = asyncio.Event()
         self._restart_records: Dict[str, RestartRecord] = defaultdict(RestartRecord)
 
+        # Startup timestamp — used to suppress health alerts during grace period
+        self._start_time: datetime = datetime.now(timezone.utc)
+
         # Component health registry
         self._component_health: Dict[str, ComponentHealth] = {}
 
@@ -273,6 +276,10 @@ class NexusAlpha:
                 )
         logger.info("Signal generation components ready.")
 
+        # Step 9b: Warm up indicator engines with historical candles so that
+        # indicators are non-NaN from the very first strategy evaluation.
+        await self._warmup_indicator_engines()
+
         # Step 10: Initialise learning system
         logger.info("[10/14] Initialising learning system…")
         self.dream_scheduler = DreamModeScheduler(
@@ -352,6 +359,52 @@ class NexusAlpha:
 
         # Gather everything — shutdown_event cancels via _supervised_task wrappers
         await asyncio.gather(*[self._track_task(c) for c in background_coros])
+
+    # ------------------------------------------------------------------
+    # Indicator Engine Warmup
+    # ------------------------------------------------------------------
+
+    async def _warmup_indicator_engines(self) -> None:
+        """
+        Pre-seed each IndicatorEngine with 500 historical candles so that
+        technical indicators are non-NaN from the very first candle close.
+        Runs during startup before the polling loop begins.
+        """
+        from src.data.providers import get_provider_for_market
+
+        for market_name, market_cfg in self.settings.enabled_markets.items():
+            for symbol in market_cfg.symbols:
+                key = f"{market_name}:{symbol}"
+                engine = self.indicator_engines.get(key)
+                if engine is None:
+                    continue
+                for timeframe in market_cfg.timeframes:
+                    try:
+                        provider = get_provider_for_market(
+                            market=market_name,
+                            symbol=symbol,
+                            settings=self.settings,
+                        )
+                        historical = await provider.fetch_ohlcv(
+                            timeframe=timeframe, limit=500
+                        )
+                        if not historical:
+                            continue
+                        for raw in historical[:-1]:  # skip the live (open) candle
+                            candle: Dict[str, Any] = raw if isinstance(raw, dict) else {
+                                "timestamp": raw[0], "open": raw[1], "high": raw[2],
+                                "low": raw[3], "close": raw[4], "volume": raw[5],
+                            }
+                            await engine.compute(candle, timeframe)
+                        logger.info(
+                            "Warmup: %s/%s/%s — %d candles fed to indicator engine",
+                            market_name, symbol, timeframe, len(historical) - 1,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Warmup failed for %s/%s/%s: %s",
+                            market_name, symbol, timeframe, exc,
+                        )
 
     # ------------------------------------------------------------------
     # Signal Generation (called by MarketOrchestrator on candle close)
@@ -529,9 +582,18 @@ class NexusAlpha:
             except asyncio.TimeoutError:
                 pass  # Normal: check again
 
+    # Suppress alerts for this many seconds after startup (warmup + first poll cycle)
+    _STARTUP_GRACE_SECONDS: int = 120
+
     async def _perform_health_check(self) -> None:
         """Run all health checks and alert on failures."""
         now = datetime.now(timezone.utc)
+        # Suppress Telegram/Discord alerts during the startup grace period so
+        # the inevitable "never_received" before the first poll doesn't spam.
+        in_grace = (
+            hasattr(self, "_start_time")
+            and (now - self._start_time).total_seconds() < self._STARTUP_GRACE_SECONDS
+        )
 
         # DB health
         try:
@@ -547,7 +609,7 @@ class NexusAlpha:
                 healthy = len(stale_symbols) == 0
                 detail = f"Stale: {stale_symbols}" if stale_symbols else "All fresh"
                 self._update_health(f"market:{market_name}", healthy, detail)
-                if not healthy and self.alert_manager:
+                if not healthy and self.alert_manager and not in_grace:
                     await self.alert_manager.notify_warning(
                         f"Stale market data [{market_name}]: {stale_symbols}"
                     )

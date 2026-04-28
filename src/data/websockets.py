@@ -97,8 +97,6 @@ class PollingConnector(BaseWSConnector):
         self._running = False
         # last seen timestamp per timeframe
         self._last_ts: dict = {}
-        # tracks which timeframes have completed their initial warmup fetch
-        self._warmed_up: set = set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -134,26 +132,6 @@ class PollingConnector(BaseWSConnector):
         while self._running:
             for tf in self._timeframes:
                 try:
-                    # First poll per timeframe: fetch 500 candles to warm the
-                    # indicator engine's rolling window immediately so indicators
-                    # are non-NaN from the very first strategy evaluation.
-                    if tf not in self._warmed_up:
-                        warmup = await provider.fetch_ohlcv(timeframe=tf, limit=500)
-                        if warmup:
-                            for raw in warmup[:-1]:  # all-but-last as closed, no-signal
-                                c = self._to_candle_dict(raw)
-                                await self._on_candle(
-                                    symbol=self.symbol,
-                                    timeframe=tf,
-                                    raw_candle=c,
-                                    is_closed=False,  # warmup — don't trigger strategy
-                                )
-                            self._warmed_up.add(tf)
-                            logger.info(
-                                "[%s/%s/%s] Warmup: fed %d historical candles to indicator engine",
-                                self.market, self.symbol, tf, len(warmup) - 1,
-                            )
-
                     candles = await provider.fetch_ohlcv(timeframe=tf, limit=3)
                     if candles:
                         raw = candles[-1]
