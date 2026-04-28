@@ -68,22 +68,34 @@ export const useNexusStore = create<NexusStore>()(
       // ---- Portfolio Actions ----
       updatePortfolio: (snapshot: PortfolioSnapshot) => {
         set((state) => {
+          const ts = snapshot.timestamp ?? snapshot.created_at ?? new Date().toISOString();
           const newPoint = {
-            time: snapshot.timestamp,
+            time: ts,
             value: snapshot.equity,
           };
           const curve = [...state.portfolioState.equityCurve, newPoint].slice(-288); // 24h at 5min intervals
+
+          // Support both old field names (realized_pnl_today/unrealized_pnl) and
+          // new DB field names (daily_pnl, portfolio_heat).
+          const dailyPnl = snapshot.daily_pnl
+            ?? ((snapshot.realized_pnl_today ?? 0) + (snapshot.unrealized_pnl ?? 0));
+          const baseEquity = snapshot.equity - dailyPnl || 1;
+          const dailyPnlPct = snapshot.daily_pnl_pct
+            ?? ((dailyPnl / baseEquity) * 100);
+          const maxDrawdown = snapshot.max_drawdown_pct ?? snapshot.drawdown_pct ?? 0;
+          const exposurePct = snapshot.exposure_pct
+            ?? ((snapshot.portfolio_heat ?? 0) * 100);
 
           return {
             portfolioState: {
               equity: snapshot.equity,
               cash: snapshot.cash,
-              dailyPnl: snapshot.realized_pnl_today + snapshot.unrealized_pnl,
-              dailyPnlPct: ((snapshot.realized_pnl_today + snapshot.unrealized_pnl) / (snapshot.equity - snapshot.realized_pnl_today - snapshot.unrealized_pnl)) * 100,
+              dailyPnl,
+              dailyPnlPct,
               drawdown: snapshot.drawdown_pct,
-              maxDrawdown: snapshot.max_drawdown_pct,
+              maxDrawdown,
               openPositions: snapshot.open_positions,
-              exposurePct: snapshot.exposure_pct,
+              exposurePct,
               equityCurve: curve,
             },
             lastUpdate: new Date().toISOString(),

@@ -4,6 +4,10 @@
  * React hooks that subscribe to Supabase Realtime channels and keep local
  * state in sync.  Each hook returns the latest snapshot of the data it
  * tracks and handles subscription cleanup on unmount automatically.
+ *
+ * The top-level `useRealtimeData()` hook wires everything into the Zustand
+ * store via a single multiplexed Supabase Realtime channel and should be
+ * called exactly once from the root layout.
  */
 
 'use client';
@@ -11,6 +15,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { useNexusStore } from '../lib/store';
 import { api } from '../lib/api';
 import type {
   Signal,
@@ -324,4 +329,142 @@ export function useRealtimePrice(symbol: string): number | null {
   }, [symbol]);
 
   return price;
+}
+
+// ---------------------------------------------------------------------------
+// useRealtimeData  (root-level hook — call once from layout)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sets up a single multiplexed Supabase Realtime channel covering
+ * portfolio_snapshots, trades, and signals, then feeds every incoming event
+ * directly into the Zustand store.
+ *
+ * Also runs an initial data load on mount (so the UI is populated before the
+ * first realtime event arrives) and polls the VPS bot health endpoint every
+ * 30 seconds.
+ *
+ * Call this hook exactly once from the root layout or a top-level provider.
+ */
+export function useRealtimeData(): void {
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
+  useEffect(() => {
+    // ------------------------------------------------------------------ 1.
+    // Initial data load — runs once immediately so the UI isn't empty while
+    // waiting for the first realtime event.
+    // ------------------------------------------------------------------ 1.
+    (async () => {
+      try {
+        const {
+          getRecentSignals,
+          getActiveTrades,
+          getLatestPortfolioSnapshot,
+        } = await import('../lib/supabase');
+
+        const [signals, trades, snapshot] = await Promise.all([
+          getRecentSignals(undefined, 50),
+          getActiveTrades(),
+          getLatestPortfolioSnapshot(),
+        ]);
+
+        const store = useNexusStore.getState();
+        if (signals.length) store.setSignalFeed(signals);
+        if (trades.length) store.setActiveTrades(trades);
+        if (snapshot) store.updatePortfolio(snapshot);
+      } catch (err) {
+        console.error('[useRealtimeData] Initial load failed:', err);
+      }
+    })();
+
+    // ------------------------------------------------------------------ 2.
+    // Single multiplexed Supabase Realtime channel for all three tables.
+    // ------------------------------------------------------------------ 2.
+    const channel = supabase.channel('nexus-realtime', {
+      config: { broadcast: { self: true } },
+    });
+
+    // Portfolio snapshots — INSERT only (bot writes a new row on each tick)
+    channel.on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'portfolio_snapshots' },
+      (payload) => {
+        useNexusStore.getState().updatePortfolio(payload.new as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+      },
+    );
+
+    // Trades — INSERT (new trade opened)
+    channel.on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'trades' },
+      (payload) => {
+        useNexusStore.getState().addTrade(payload.new as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+      },
+    );
+
+    // Trades — UPDATE (trade closed / status changed)
+    channel.on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'trades' },
+      (payload) => {
+        useNexusStore.getState().updateTrade(payload.new as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+      },
+    );
+
+    // Signals — INSERT
+    channel.on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'signals' },
+      (payload) => {
+        useNexusStore.getState().addSignal(payload.new as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+      },
+    );
+
+    // Track channel subscription status in the store's isConnected flag
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        useNexusStore.getState().setConnected(true);
+        console.log('[useRealtimeData] Subscribed to nexus-realtime channel');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        useNexusStore.getState().setConnected(false);
+        console.warn('[useRealtimeData] Channel status:', status);
+      }
+    });
+
+    channelRef.current = channel;
+
+    // ------------------------------------------------------------------ 3.
+    // VPS bot health polling — every 30 s.
+    // ------------------------------------------------------------------ 3.
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('http://187.77.140.75:8080/health', {
+          signal: AbortSignal.timeout(5000),
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          useNexusStore.getState().updateSystemStatus(data);
+        }
+      } catch {
+        // Bot unreachable — leave last known system status in place; do not
+        // overwrite with zeros so the last-good indicators stay visible.
+      }
+    };
+
+    checkHealth();
+    const healthTimer = setInterval(checkHealth, 30_000);
+
+    // ------------------------------------------------------------------ 4.
+    // Cleanup on unmount.
+    // ------------------------------------------------------------------ 4.
+    return () => {
+      clearInterval(healthTimer);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      useNexusStore.getState().setConnected(false);
+    };
+  }, []); // Empty deps: set up once on mount, torn down on unmount
 }

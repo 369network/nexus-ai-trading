@@ -4,7 +4,7 @@ import './globals.css';
 import { Inter } from 'next/font/google';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import {
   LayoutDashboard,
   Bitcoin,
@@ -22,21 +22,13 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Menu,
+  X,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
-import {
-  subscribeToSignals,
-  subscribeToTrades,
-  subscribeToRiskEvents,
-  subscribeToPortfolioSnapshots,
-  subscribeToAgentDecisions,
-  getActiveTrades,
-  getRecentSignals,
-  getLatestPortfolioSnapshot,
-} from '@/lib/supabase';
+import { useRealtimeData } from '@/hooks/useRealtimeData';
 import { cn, formatCurrency, formatPercent, getPnlColor } from '@/lib/utils';
 import { LivePriceTicker } from '@/components/LivePriceTicker';
-import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -58,86 +50,16 @@ const NAV_ITEMS = [
 function RootLayoutInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Mobile: drawer starts closed
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  const {
-    portfolioState,
-    systemStatus,
-    isConnected,
-    setConnected,
-    addSignal,
-    addTrade,
-    updateTrade,
-    addRiskEvent,
-    updatePortfolio,
-    updateAgentState,
-    setSignalFeed,
-    setActiveTrades,
-  } = useNexusStore();
+  // Close mobile drawer on route change
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
 
-  // Bootstrap initial data
-  useEffect(() => {
-    const bootstrap = async () => {
-      try {
-        const [signals, trades, snapshot] = await Promise.all([
-          getRecentSignals(undefined, 50),
-          getActiveTrades(),
-          getLatestPortfolioSnapshot(),
-        ]);
+  const { portfolioState, systemStatus, isConnected } = useNexusStore();
 
-        if (signals.length) setSignalFeed(signals);
-        if (trades.length) setActiveTrades(trades);
-        if (snapshot) updatePortfolio(snapshot);
-      } catch (err) {
-        console.error('[Bootstrap] Failed to load initial data:', err);
-      }
-    };
-
-    bootstrap();
-  }, [setSignalFeed, setActiveTrades, updatePortfolio]);
-
-  // Setup realtime subscriptions
-  useEffect(() => {
-    const channels: RealtimeChannel[] = [];
-
-    const signalChannel = subscribeToSignals((signal) => {
-      addSignal(signal);
-      setConnected(true);
-    });
-    channels.push(signalChannel);
-
-    const tradeChannel = subscribeToTrades((trade, eventType) => {
-      if (eventType === 'INSERT') addTrade(trade);
-      else updateTrade(trade);
-      setConnected(true);
-    });
-    channels.push(tradeChannel);
-
-    const riskChannel = subscribeToRiskEvents((event) => {
-      addRiskEvent(event);
-    });
-    channels.push(riskChannel);
-
-    const portfolioChannel = subscribeToPortfolioSnapshots((snapshot) => {
-      updatePortfolio(snapshot);
-    });
-    channels.push(portfolioChannel);
-
-    const agentChannel = subscribeToAgentDecisions((decision) => {
-      updateAgentState(decision.role, decision);
-    });
-    channels.push(agentChannel);
-
-    // Heartbeat check
-    const heartbeat = setInterval(() => {
-      // In production, check Supabase connection status
-      setConnected(true);
-    }, 30000);
-
-    return () => {
-      channels.forEach((ch) => ch.unsubscribe());
-      clearInterval(heartbeat);
-    };
-  }, [addSignal, addTrade, updateTrade, addRiskEvent, updatePortfolio, updateAgentState, setConnected]);
+  // Single hook: initial load + Supabase Realtime subscriptions + health polling
+  useRealtimeData();
 
   const systemMode = systemStatus.paper_mode
     ? { label: 'PAPER', color: 'text-nexus-yellow', dot: 'warning' }
@@ -149,29 +71,45 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-30 md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <aside
         className={cn(
           'flex flex-col bg-card border-r border-border transition-all duration-300 flex-shrink-0',
-          sidebarCollapsed ? 'w-16' : 'w-56'
+          // Desktop: inline, collapsible
+          'md:relative md:translate-x-0',
+          sidebarCollapsed ? 'md:w-16' : 'md:w-56',
+          // Mobile: fixed drawer, full width when open
+          'fixed inset-y-0 left-0 z-40 w-64 md:static md:z-auto',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
         )}
       >
         {/* Logo */}
         <div className="flex items-center justify-between px-4 py-5 border-b border-border">
-          {!sidebarCollapsed && (
+          {(!sidebarCollapsed || mobileOpen) && (
             <div>
               <span className="font-bold text-sm tracking-widest text-nexus-blue">NEXUS</span>
               <span className="font-bold text-sm tracking-widest text-nexus-green"> ALPHA</span>
             </div>
           )}
+          {/* Mobile: X to close */}
           <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            onClick={() => mobileOpen ? setMobileOpen(false) : setSidebarCollapsed(!sidebarCollapsed)}
             className="p-1.5 rounded-md text-muted hover:text-white hover:bg-white/5 transition-colors ml-auto"
           >
-            {sidebarCollapsed ? (
-              <ChevronRight size={14} />
+            {mobileOpen ? (
+              <X size={16} className="md:hidden" />
+            ) : sidebarCollapsed ? (
+              <ChevronRight size={14} className="hidden md:block" />
             ) : (
-              <ChevronLeft size={14} />
+              <ChevronLeft size={14} className="hidden md:block" />
             )}
           </button>
         </div>
@@ -229,17 +167,23 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
       {/* Main area */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header */}
-        <header className="flex items-center justify-between px-6 py-3 bg-card border-b border-border flex-shrink-0 z-10">
-          {/* Left: breadcrumb */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted uppercase tracking-wider">
+        <header className="flex items-center justify-between px-4 md:px-6 py-3 bg-card border-b border-border flex-shrink-0 z-10">
+          {/* Left: hamburger (mobile) + breadcrumb */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="md:hidden p-1.5 rounded-md text-muted hover:text-white hover:bg-white/5 transition-colors"
+            >
+              <Menu size={18} />
+            </button>
+            <span className="text-xs text-muted uppercase tracking-wider hidden sm:block">
               {pathname === '/' ? 'Overview' : pathname.slice(1).replace(/-/g, ' ')}
             </span>
           </div>
 
-          {/* Center: Live P&L ticker */}
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-3">
+          {/* Center: Live P&L ticker (hidden on very small mobile) */}
+          <div className="hidden sm:flex items-center gap-4 md:gap-6">
+            <div className="flex items-center gap-2 md:gap-3">
               <div className="text-center">
                 <div className="text-xs text-muted">Equity</div>
                 <div className="font-mono text-sm font-semibold text-white">
@@ -313,7 +257,7 @@ function RootLayoutInner({ children }: { children: React.ReactNode }) {
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto bg-background">
-          <div className="p-6">
+          <div className="p-3 sm:p-4 md:p-6">
             {children}
           </div>
         </main>
