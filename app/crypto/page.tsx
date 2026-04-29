@@ -763,9 +763,18 @@ export default function CryptoPage() {
           rel="noopener noreferrer"
           className="hover:text-white transition-colors"
         >
-          Binance Futures API
-        </a>{' '}
-        &amp;{' '}
+          Binance API
+        </a>
+        {' · '}
+        <a
+          href="https://blockchain.info/unconfirmed-transactions"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-white transition-colors"
+        >
+          blockchain.info
+        </a>
+        {' · '}
         <a
           href="https://alternative.me/crypto/fear-and-greed-index/"
           target="_blank"
