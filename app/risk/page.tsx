@@ -337,7 +337,7 @@ const MARKET_COLORS: Record<string, string> = {
 };
 
 export default function RiskPage() {
-  const { portfolioState, riskEvents, activeTrades } = useNexusStore();
+  const { portfolioState, riskEvents, activeTrades, agentStates } = useNexusStore();
   const [equityCurve, setEquityCurve] = useState<{ time: string; value: number }[]>([]);
   const vixData = useVix();
 
@@ -378,11 +378,27 @@ export default function RiskPage() {
     return equity > 0 ? notional / equity : null;
   }, [firstOpenTrade, equity]);
 
-  // Signal validation score derived from active trades
+  // Signal validation score: real average confidence from agent decisions
   const signalScore = useMemo(() => {
-    if (activeTrades.length === 0) return 0;
-    return 0.65 + activeTrades.length * 0.02;
-  }, [activeTrades.length]);
+    const decisions = Object.values(agentStates).filter(
+      (d): d is NonNullable<typeof d> => d !== undefined && d !== null
+    );
+    if (decisions.length === 0) return null;
+    return decisions.reduce((s, d) => s + (d.confidence ?? 0), 0) / decisions.length;
+  }, [agentStates]);
+
+  // Average pairwise correlation across real open-trade symbols
+  const avgCorrelation = useMemo(() => {
+    if (tradeSymbols.length < 2) return 0;
+    let sum = 0, count = 0;
+    for (let i = 0; i < tradeSymbols.length; i++) {
+      for (let j = i + 1; j < tradeSymbols.length; j++) {
+        sum += getCorrelation(tradeSymbols[i], tradeSymbols[j]);
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  }, [tradeSymbols]);
 
   // ── Circuit Breakers (real values) ───────────────────────
   const circuitBreakers: CircuitBreaker[] = useMemo(() => [
@@ -407,9 +423,9 @@ export default function RiskPage() {
     {
       id: '4', name: 'Correlation Limit',
       description: 'Reduce sizing if avg corr > 0.7',
-      enabled: true, triggered: false,
+      enabled: true, triggered: avgCorrelation >= 0.7,
       threshold: 0.7,
-      current_value: activeTrades.filter((t) => t.status === 'OPEN').length > 1 ? 0.52 : 0,
+      current_value: avgCorrelation,
     },
     {
       id: '5', name: 'Volatility Spike',
@@ -423,7 +439,7 @@ export default function RiskPage() {
       enabled: true, triggered: false,
       threshold: 0, current_value: 0,
     },
-  ], [dailyLossPct, drawdownPct, maxConcentration, activeTrades, vixData]);
+  ], [dailyLossPct, drawdownPct, maxConcentration, activeTrades, vixData, avgCorrelation]);
 
   // ── VIX regime color ─────────────────────────────────────
   const regimeColor = useMemo(() => {
@@ -447,10 +463,10 @@ export default function RiskPage() {
         checks: [
           {
             name: 'Confidence threshold',
-            passed: true,
-            current_value: Number(signalScore.toFixed(2)),
+            passed: signalScore === null || signalScore >= 0.65,
+            current_value: signalScore !== null ? Number(signalScore.toFixed(2)) : 'N/A',
             threshold: 0.65,
-            message: 'OK',
+            message: signalScore === null ? 'Awaiting agent data' : signalScore >= 0.65 ? 'OK' : 'Low confidence',
           },
           {
             name: 'Strength minimum',
@@ -481,7 +497,13 @@ export default function RiskPage() {
             threshold: 0.05,
             message: 'OK',
           },
-          { name: 'Max position size', passed: true, current_value: 0.08, threshold: 0.10, message: 'OK' },
+          {
+            name: 'Max position size',
+            passed: maxConcentration <= 10,
+            current_value: Number((maxConcentration / 100).toFixed(4)),
+            threshold: 0.10,
+            message: maxConcentration <= 10 ? 'OK' : 'Above limit',
+          },
         ],
       },
       {
@@ -504,7 +526,13 @@ export default function RiskPage() {
             threshold: 30,
             message: 'OK',
           },
-          { name: 'Correlation limit', passed: true, current_value: 0.52, threshold: 0.70, message: 'OK' },
+          {
+            name: 'Correlation limit',
+            passed: avgCorrelation <= 0.70,
+            current_value: Number(avgCorrelation.toFixed(2)),
+            threshold: 0.70,
+            message: avgCorrelation <= 0.70 ? 'OK' : 'High correlation',
+          },
         ],
       },
       {
@@ -544,11 +572,17 @@ export default function RiskPage() {
             message: vixData ? `${vixData.regime} regime` : 'Loading',
           },
           { name: 'Liquidity check', passed: true, current_value: 1, threshold: 1, message: 'Adequate' },
-          { name: 'Correlation regime', passed: true, current_value: 0.42, threshold: 0.85, message: 'Normal' },
+          {
+            name: 'Correlation regime',
+            passed: avgCorrelation <= 0.85,
+            current_value: Number(avgCorrelation.toFixed(2)),
+            threshold: 0.85,
+            message: avgCorrelation <= 0.85 ? 'Normal' : 'High regime',
+          },
         ],
       },
     ];
-  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration, activeTrades.length, firstOpenTrade, positionSizingVal, signalScore, vixData]);
+  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration, activeTrades.length, firstOpenTrade, positionSizingVal, signalScore, vixData, avgCorrelation]);
 
   // ── Portfolio Exposure (real trades) ─────────────────────
   const marketExposure = useMemo(() => {

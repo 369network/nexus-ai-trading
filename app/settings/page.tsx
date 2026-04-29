@@ -185,11 +185,11 @@ const FEATURE_FLAGS: FeatureFlag[] = [
 ];
 
 const LLM_WEIGHTS: { agent: string; weight: number; optimal: number }[] = [
-  { agent: 'Bull', weight: 0.72, optimal: 0.68 },
-  { agent: 'Bear', weight: 0.65, optimal: 0.71 },
-  { agent: 'Fundamental', weight: 0.81, optimal: 0.78 },
-  { agent: 'Technical', weight: 0.88, optimal: 0.85 },
-  { agent: 'Sentiment', weight: 0.62, optimal: 0.65 },
+  { agent: 'Bull', weight: 0.72, optimal: 0.72 },
+  { agent: 'Bear', weight: 0.65, optimal: 0.65 },
+  { agent: 'Fundamental', weight: 0.81, optimal: 0.81 },
+  { agent: 'Technical', weight: 0.88, optimal: 0.88 },
+  { agent: 'Sentiment', weight: 0.62, optimal: 0.62 },
 ];
 
 const RISK_LIMITS = [
@@ -766,7 +766,7 @@ export default function SettingsPage() {
                 className="flex items-center gap-1.5 text-xs text-nexus-blue hover:text-nexus-blue/80 transition-colors"
               >
                 <RefreshCw size={12} />
-                Reset to Brier-Optimal
+                Reset to Defaults
               </button>
             </div>
             <div className="space-y-4">
@@ -775,7 +775,7 @@ export default function SettingsPage() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-white">{w.agent} Agent</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted">Optimal: {w.optimal.toFixed(2)}</span>
+                      <span className="text-xs text-muted">Default: {w.optimal.toFixed(2)}</span>
                       <span className="text-sm font-mono text-nexus-blue">{w.weight.toFixed(2)}</span>
                     </div>
                   </div>
@@ -788,7 +788,7 @@ export default function SettingsPage() {
                   <div className="flex justify-between text-xs text-muted mt-0.5">
                     <span>0.1</span>
                     <span className={cn(w.weight !== w.optimal ? 'text-nexus-yellow' : 'text-muted')}>
-                      {w.weight !== w.optimal ? 'Modified' : 'Optimal'}
+                      {w.weight !== w.optimal ? 'Modified' : 'Default'}
                     </span>
                     <span>1.0</span>
                   </div>

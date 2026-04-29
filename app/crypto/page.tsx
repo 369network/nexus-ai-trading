@@ -452,21 +452,7 @@ function OpenInterestPanel({
   oi: OpenInterestData | null;
   loading: boolean;
 }) {
-  // Build a minimal sparkline from the single data point we have.
-  // We keep the same AreaChart layout but show only the live value with
-  // a placeholder historical series so the chart renders consistently.
   const oiValue = oi ? parseFloat(oi.openInterest) / 1e9 : null;
-
-  // Placeholder 4-point series so recharts doesn't render empty
-  const chartData =
-    oiValue !== null
-      ? [
-          { time: '', oi: oiValue * 0.97 },
-          { time: '', oi: oiValue * 0.99 },
-          { time: '', oi: oiValue * 0.995 },
-          { time: 'Now', oi: oiValue },
-        ]
-      : [];
 
   return (
     <div className="nexus-card p-4">
@@ -484,50 +470,16 @@ function OpenInterestPanel({
           </div>
         </div>
       ) : oiValue !== null ? (
-        <>
-          <ResponsiveContainer width="100%" height={120}>
-            <AreaChart
-              data={chartData}
-              margin={{ top: 4, right: 0, left: -20, bottom: 0 }}
-            >
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 10, fill: '#6b7280' }}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#6b7280' }}
-                tickLine={false}
-                domain={['auto', 'auto']}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: '#1a1a28',
-                  border: '1px solid #2a2a3e',
-                  borderRadius: '6px',
-                  fontSize: '11px',
-                }}
-                formatter={(v: number) => [`${v.toFixed(2)}B`, 'OI']}
-              />
-              <Area
-                type="monotone"
-                dataKey="oi"
-                stroke="#8844ff"
-                fill="rgba(136, 68, 255, 0.15)"
-                strokeWidth={1.5}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-          <div className="mt-2 flex justify-between text-xs text-muted">
-            <span>
-              Live:{' '}
-              <span className="text-nexus-purple font-mono">
-                {oiValue.toFixed(2)}B
-              </span>
-            </span>
-            <span className="text-xs text-muted">BTCUSDT</span>
+        <div className="flex flex-col items-center justify-center py-6 gap-3">
+          <div className="text-4xl font-bold font-mono text-nexus-purple">
+            {oiValue.toFixed(2)}B
           </div>
-        </>
+          <div className="text-xs text-muted">USDT notional · BTCUSDT perpetual</div>
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Activity size={10} className="text-nexus-purple" />
+            <span>Live snapshot — no historical data available on free tier</span>
+          </div>
+        </div>
       ) : (
         <p className="text-xs text-muted text-center py-8">
           Open interest unavailable
