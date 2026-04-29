@@ -222,6 +222,40 @@ class PaperExecutor(PaperTrader):
             logger.warning("PaperExecutor: could not restore open positions: %s", exc)
 
     # ------------------------------------------------------------------
+    # Portfolio state accessor (used by NexusBot._metrics_loop)
+    # ------------------------------------------------------------------
+
+    def get_portfolio_state(self) -> Any:
+        """Return a SimpleNamespace snapshot of portfolio metrics.
+
+        The NexusBot._metrics_loop calls
+        ``execution_engine.get_portfolio_state()`` which delegates here.
+        Returning a non-None object allows the loop to:
+          • update Prometheus gauges (equity, daily_pnl, drawdown, etc.)
+          • fire the periodic 5-minute Supabase portfolio_snapshots write
+
+        Field names match what _metrics_loop reads via ``getattr``.
+        """
+        from types import SimpleNamespace
+
+        p = self._portfolio
+        initial = p.initial_capital or 1.0
+        peak = p.peak_equity or initial
+        equity = p.total_equity
+        drawdown_pct = (
+            round(((peak - equity) / peak) * 100 * -1, 4) if peak > 0 else 0.0
+        )
+
+        return SimpleNamespace(
+            equity=equity,
+            daily_pnl=getattr(p, "daily_pnl", 0.0),
+            open_positions=len(p.positions),
+            drawdown_pct=drawdown_pct,
+            trade_history=getattr(p, "trade_history", []),
+            positions=p.positions,
+        )
+
+    # ------------------------------------------------------------------
     # Override _close_position to capture realized P&L for DB persistence
     # and to populate trade_history for win-rate calculation
     # ------------------------------------------------------------------
