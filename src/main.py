@@ -352,6 +352,13 @@ class NexusAlpha:
             logger.warning("BrierTracker: seed from Supabase failed — running in-memory: %s", _be)
         logger.info("BrierTracker initialised (supabase_client=%s)", "connected" if _brier_client else "None")
 
+        # Inject shared BrierTracker into the LLM ensemble so per-model
+        # predictions are all recorded to the same instance (and thus the
+        # same Supabase table) rather than two independent in-memory stores.
+        if self.llm_ensemble is not None:
+            self.llm_ensemble.set_brier_tracker(self.brier_tracker)
+            logger.info("BrierTracker: injected shared instance into LLMEnsemble")
+
         await self.dream_scheduler.init()
         await self.memory_updater.init()
         logger.info("Learning system ready.")

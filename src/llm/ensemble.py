@@ -1,12 +1,26 @@
 # src/llm/ensemble.py
 """LLM Ensemble: routes queries to the best model per market, cascades on failure,
-and enforces daily cost guards."""
+and enforces daily cost guards.
+
+BrierTracker integration
+------------------------
+The ensemble records a per-model BrierTracker prediction on every successful
+LLM call by extracting ``decision`` and ``confidence`` from the JSON response.
+This lets BrierTracker rank individual models (claude-sonnet-4-6, gpt-4o, …)
+rather than just the aggregate "strategy_ensemble".
+
+The BrierTracker instance is injected AFTER construction via
+``set_brier_tracker()`` so that ``main.py`` can share a single, properly
+async-connected instance across the whole system.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import date, datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base_llm import BaseLLM, LLMResponse
 from .brier_tracker import BrierTracker, DEFAULT_WEIGHTS
@@ -27,6 +41,17 @@ MODEL_FALLBACK_ORDER: List[str] = [
 # Cost per call (rough upper bound used for guard checking)
 _MODEL_CHEAPEST = "llama3.1:8b"
 
+# LLM decision values → BrierTracker direction
+_DECISION_TO_DIRECTION: Dict[str, str] = {
+    "STRONG_BUY":  "LONG",
+    "BUY":         "LONG",
+    "SLIGHT_BUY":  "LONG",
+    "NEUTRAL":     "NEUTRAL",
+    "SLIGHT_SELL": "SHORT",
+    "SELL":        "SHORT",
+    "STRONG_SELL": "SHORT",
+}
+
 
 class LLMEnsemble:
     """Routes LLM queries to the best-performing model for each market.
@@ -37,6 +62,7 @@ class LLMEnsemble:
     * Cascading fallback when the primary model fails
     * Dual-model averaging for high-stakes decisions
     * Daily cost guard that forces the cheapest model once the budget is hit
+    * Per-model BrierTracker prediction recording on every successful call
     """
 
     def __init__(
@@ -52,7 +78,8 @@ class LLMEnsemble:
             Map of model-name → :class:`BaseLLM` instance.
             Expected keys match :data:`MODEL_FALLBACK_ORDER`.
         brier_tracker:
-            Shared :class:`BrierTracker` for dynamic weight computation.
+            Shared :class:`BrierTracker` for dynamic weight computation and
+            per-model prediction recording.
         max_daily_cost:
             Once accumulated daily spend reaches this threshold the ensemble
             switches to the cheapest available model only.
@@ -64,6 +91,19 @@ class LLMEnsemble:
         # Daily cost accounting
         self._daily_cost: float = 0.0
         self._cost_date: date = datetime.now(tz=timezone.utc).date()
+
+    # ------------------------------------------------------------------
+    # Dependency injection (allows main.py to share one BrierTracker)
+    # ------------------------------------------------------------------
+
+    def set_brier_tracker(self, brier: BrierTracker) -> None:
+        """Replace the internal BrierTracker with a shared instance.
+
+        Call this after both the ensemble and the authoritative BrierTracker
+        have been constructed so all prediction records go to the same object.
+        """
+        self._brier = brier
+        logger.debug("LLMEnsemble: BrierTracker replaced with shared instance")
 
     # ------------------------------------------------------------------
     # Public interface
@@ -93,6 +133,7 @@ class LLMEnsemble:
         """
         self._refresh_daily_budget()
 
+        symbol = self._extract_symbol(user_prompt)
         ordered = self._get_model_order(market)
 
         # Cost guard: if over daily budget, force cheapest model only
@@ -106,10 +147,14 @@ class LLMEnsemble:
 
         if high_stakes and len(ordered) >= 2 and self._daily_cost < self._max_daily_cost:
             return await self._dual_query(
-                system_prompt, user_prompt, ordered[0], ordered[1]
+                system_prompt, user_prompt, ordered[0], ordered[1],
+                market=market, symbol=symbol,
             )
 
-        return await self._cascade_query(system_prompt, user_prompt, ordered)
+        return await self._cascade_query(
+            system_prompt, user_prompt, ordered,
+            market=market, symbol=symbol,
+        )
 
     def get_dynamic_weights(self, market: str) -> Dict[str, float]:
         """Return Brier-score-derived model weights for *market*."""
@@ -139,6 +184,8 @@ class LLMEnsemble:
         system_prompt: str,
         user_prompt: str,
         model_order: List[str],
+        market: str = "",
+        symbol: str = "",
     ) -> LLMResponse:
         """Try each model in order; return the first successful response."""
         last_exc: Optional[Exception] = None
@@ -156,6 +203,9 @@ class LLMEnsemble:
                 logger.debug(
                     "Ensemble: %s responded (cost=$%.6f)", model_name, response.cost_usd
                 )
+                # Record per-model Brier prediction
+                if market and symbol:
+                    self._try_record_brier(model_name, market, symbol, response.text)
                 return response
             except Exception as exc:
                 logger.warning(
@@ -173,23 +223,36 @@ class LLMEnsemble:
         user_prompt: str,
         primary: str,
         secondary: str,
+        market: str = "",
+        symbol: str = "",
     ) -> LLMResponse:
         """Query two models and merge their responses for high-stakes decisions."""
         import asyncio
 
-        tasks = []
-        for model_name in (primary, secondary):
-            client = self._clients.get(model_name)
-            if client:
-                tasks.append(client.query(system_prompt=system_prompt, user_prompt=user_prompt))
+        async def _query_one(model_name: str) -> Tuple[str, LLMResponse]:
+            client = self._clients[model_name]
+            resp = await client.query(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            return model_name, resp
 
+        tasks = [
+            _query_one(m)
+            for m in (primary, secondary)
+            if m in self._clients
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        valid: List[LLMResponse] = []
+        valid: List[Tuple[str, LLMResponse]] = []
         for r in results:
-            if isinstance(r, LLMResponse):
-                valid.append(r)
-                self._accumulate_cost(r.cost_usd)
+            if isinstance(r, tuple):
+                model_name, response = r
+                valid.append((model_name, response))
+                self._accumulate_cost(response.cost_usd)
+                # Record per-model Brier prediction for each successful response
+                if market and symbol:
+                    self._try_record_brier(model_name, market, symbol, response.text)
             else:
                 logger.warning("Dual query: one model failed: %s", r)
 
@@ -197,22 +260,81 @@ class LLMEnsemble:
             raise RuntimeError("Both models failed in dual query")
 
         if len(valid) == 1:
-            return valid[0]
+            return valid[0][1]
 
         # Merge: concatenate responses with a separator so downstream parsers
         # can handle both, then take the first model's metadata.
+        (m0, r0), (m1, r1) = valid[0], valid[1]
         merged_text = (
-            f"[PRIMARY MODEL: {primary}]\n{valid[0].text}\n\n"
-            f"[SECONDARY MODEL: {secondary}]\n{valid[1].text}"
+            f"[PRIMARY MODEL: {m0}]\n{r0.text}\n\n"
+            f"[SECONDARY MODEL: {m1}]\n{r1.text}"
         )
         return LLMResponse(
             text=merged_text,
-            model=f"{primary}+{secondary}",
-            input_tokens=valid[0].input_tokens + valid[1].input_tokens,
-            output_tokens=valid[0].output_tokens + valid[1].output_tokens,
-            latency_ms=max(valid[0].latency_ms, valid[1].latency_ms),
-            cost_usd=valid[0].cost_usd + valid[1].cost_usd,
+            model=f"{m0}+{m1}",
+            input_tokens=r0.input_tokens + r1.input_tokens,
+            output_tokens=r0.output_tokens + r1.output_tokens,
+            latency_ms=max(r0.latency_ms, r1.latency_ms),
+            cost_usd=r0.cost_usd + r1.cost_usd,
         )
+
+    # ------------------------------------------------------------------
+    # BrierTracker helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_symbol(user_prompt: str) -> str:
+        """Parse the trading symbol from the market context header in *user_prompt*.
+
+        Looks for the pattern: ``MARKET CONTEXT: BTCUSDT | ...``
+        Falls back to ``"UNKNOWN"`` if the pattern is not found.
+        """
+        m = re.search(r"MARKET CONTEXT:\s*(\S+)\s*\|", user_prompt)
+        return m.group(1) if m else "UNKNOWN"
+
+    def _try_record_brier(
+        self,
+        model_name: str,
+        market: str,
+        symbol: str,
+        response_text: str,
+    ) -> None:
+        """Parse the LLM JSON response and record a per-model Brier prediction.
+
+        Silently skips on any parse or tracking error so the trading pipeline
+        is never blocked by calibration bookkeeping.
+        """
+        try:
+            # Extract outermost JSON object from the response (handles markdown fences)
+            json_match = re.search(r"\{[^{}]*\}", response_text, re.DOTALL)
+            if not json_match:
+                # Try a broader match for deeply nested JSON
+                json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if not json_match:
+                return
+
+            data = json.loads(json_match.group())
+
+            decision = str(data.get("decision", "")).strip().upper()
+            direction = _DECISION_TO_DIRECTION.get(decision, "NEUTRAL")
+
+            raw_conf = data.get("confidence")
+            confidence = float(raw_conf) if raw_conf is not None else 0.5
+            confidence = max(0.0, min(1.0, confidence))
+
+            self._brier.record_prediction(
+                model=model_name,
+                market=market,
+                symbol=symbol,
+                direction=direction,
+                confidence=confidence,
+            )
+            logger.debug(
+                "BrierTracker: recorded %s/%s → %s (%.2f) via %s",
+                market, symbol, direction, confidence, model_name,
+            )
+        except Exception as exc:
+            logger.debug("BrierTracker: parse/record skipped for %s: %s", model_name, exc)
 
     # ------------------------------------------------------------------
     # Budget tracking
@@ -250,9 +372,11 @@ class LLMEnsemble:
         """
         Build an LLMEnsemble from a Settings object.
         Automatically imports and constructs available LLM clients.
-        """
-        from src.llm.brier_tracker import BrierTracker
 
+        Note: The BrierTracker created here uses supabase_client=None (in-memory).
+        Call set_brier_tracker() after construction to inject the shared instance
+        that has the async Supabase client wired in.
+        """
         clients: Dict[str, "BaseLLM"] = {}
 
         # Claude
@@ -293,6 +417,7 @@ class LLMEnsemble:
         except Exception as exc:
             logger.debug("Ollama not available: %s", exc)
 
-        brier = BrierTracker(supabase_client=db)
+        # In-memory placeholder — replaced by set_brier_tracker() after Step 10
+        brier = BrierTracker(supabase_client=None)
         max_cost = getattr(settings, "max_daily_llm_cost", 10.0)
         return cls(clients=clients, brier_tracker=brier, max_daily_cost=max_cost)
