@@ -52,8 +52,11 @@ function BrierScoreMatrix({ scores }: { scores: BrierScore[] }) {
           </thead>
           <tbody>
             {AGENT_ROLES.slice(0, 5).map(({ role, label }) => {
-              const agentScores = MARKETS.map((m) => getScore(role, m)?.score ?? 0.18);
-              const avg = agentScores.reduce((s, v) => s + v, 0) / agentScores.length;
+              const agentScores = MARKETS.map((m) => getScore(role, m)?.score ?? null);
+              const validScores = agentScores.filter((s): s is number => s !== null);
+              const avg = validScores.length > 0
+                ? validScores.reduce((s, v) => s + v, 0) / validScores.length
+                : null;
               return (
                 <tr key={role}>
                   <td className="py-1.5 pr-3 text-white font-medium capitalize">{label.split(' ')[0]}</td>
@@ -61,16 +64,24 @@ function BrierScoreMatrix({ scores }: { scores: BrierScore[] }) {
                     const s = agentScores[i];
                     return (
                       <td key={m} className="text-center py-1.5 px-2">
-                        <span className={cn('px-2 py-0.5 rounded text-xs font-mono', getColor(s))}>
-                          {s.toFixed(3)}
-                        </span>
+                        {s !== null ? (
+                          <span className={cn('px-2 py-0.5 rounded text-xs font-mono', getColor(s))}>
+                            {s.toFixed(3)}
+                          </span>
+                        ) : (
+                          <span className="text-muted text-xs">—</span>
+                        )}
                       </td>
                     );
                   })}
                   <td className="text-center py-1.5">
-                    <span className={cn('px-2 py-0.5 rounded text-xs font-mono font-bold', getColor(avg))}>
-                      {avg.toFixed(3)}
-                    </span>
+                    {avg !== null ? (
+                      <span className={cn('px-2 py-0.5 rounded text-xs font-mono font-bold', getColor(avg))}>
+                        {avg.toFixed(3)}
+                      </span>
+                    ) : (
+                      <span className="text-muted text-xs">—</span>
+                    )}
                   </td>
                 </tr>
               );

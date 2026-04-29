@@ -223,12 +223,21 @@ export default function OverviewPage() {
   const neutralVotes = agentVotes.filter((a) => a?.decision === 'NEUTRAL').length;
 
   const consensusData = [
-    { name: 'Bull', value: bullVotes || 4, color: '#00ff88' },
-    { name: 'Bear', value: bearVotes || 2, color: '#ff4444' },
-    { name: 'Neutral', value: neutralVotes || 1, color: '#6b7280' },
+    { name: 'Bull', value: bullVotes, color: '#00ff88' },
+    { name: 'Bear', value: bearVotes, color: '#ff4444' },
+    { name: 'Neutral', value: neutralVotes, color: '#6b7280' },
   ];
 
   const totalVotes = consensusData.reduce((s, d) => s + d.value, 0);
+
+  // Warning = circuit breakers not yet triggered but approaching threshold (>50% used)
+  const _equity = portfolioState.equity ?? 0;
+  const _dailyLossPct = _equity > 0 ? Math.abs((portfolioState.dailyPnl / _equity) * 100) : 0;
+  const _drawdownPct = Math.abs(portfolioState.drawdown ?? 0);
+  const warningCount = [
+    _dailyLossPct >= 1.5 && !systemStatus.circuit_breakers.daily_loss_limit,
+    _drawdownPct >= 7.5 && !systemStatus.circuit_breakers.max_drawdown,
+  ].filter(Boolean).length;
 
   return (
     <div className="space-y-6">
@@ -367,62 +376,74 @@ export default function OverviewPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-center">
-            <ResponsiveContainer width={180} height={180}>
-              <PieChart>
-                <Pie
-                  data={consensusData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={55}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {consensusData.map((entry, index) => (
-                    <Cell key={index} fill={entry.color} opacity={0.9} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    background: '#1a1a28',
-                    border: '1px solid #2a2a3e',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                  formatter={(value: number) => [`${value} votes`, '']}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="space-y-2 mt-2">
-            {consensusData.map((item) => (
-              <div key={item.name} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: item.color }}
-                  />
-                  <span className="text-xs text-gray-300">{item.name}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-20 h-1 bg-border rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${(item.value / totalVotes) * 100}%`,
-                        backgroundColor: item.color,
+          {totalVotes === 0 ? (
+            <div className="flex flex-col items-center justify-center h-44 gap-2">
+              <Brain size={28} className="text-muted opacity-40" />
+              <span className="text-xs text-muted text-center">
+                No agent votes yet<br />
+                <span className="opacity-60">Waiting for bot to produce signals</span>
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-center">
+                <ResponsiveContainer width={180} height={180}>
+                  <PieChart>
+                    <Pie
+                      data={consensusData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={55}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {consensusData.map((entry, index) => (
+                        <Cell key={index} fill={entry.color} opacity={0.9} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        background: '#1a1a28',
+                        border: '1px solid #2a2a3e',
+                        borderRadius: '8px',
+                        fontSize: '12px',
                       }}
+                      formatter={(value: number) => [`${value} votes`, '']}
                     />
-                  </div>
-                  <span className="text-xs font-mono text-muted w-6 text-right">
-                    {item.value}
-                  </span>
-                </div>
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
+
+              <div className="space-y-2 mt-2">
+                {consensusData.map((item) => (
+                  <div key={item.name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-2.5 h-2.5 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      />
+                      <span className="text-xs text-gray-300">{item.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 h-1 bg-border rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${(item.value / totalVotes) * 100}%`,
+                            backgroundColor: item.color,
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono text-muted w-6 text-right">
+                        {item.value}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           {/* Current consensus */}
           <div className="mt-4 pt-3 border-t border-border">
@@ -486,7 +507,7 @@ export default function OverviewPage() {
                 <div className="text-xs text-muted">Safe</div>
               </div>
               <div>
-                <div className="text-lg font-mono font-bold text-nexus-yellow">0</div>
+                <div className="text-lg font-mono font-bold text-nexus-yellow">{warningCount}</div>
                 <div className="text-xs text-muted">Warning</div>
               </div>
               <div>
