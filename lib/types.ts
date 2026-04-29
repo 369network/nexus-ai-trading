@@ -222,7 +222,7 @@ export interface RiskLayer {
 export interface RiskCheck {
   name: string;
   passed: boolean;
-  current_value: number;
+  current_value: number | string;
   threshold: number;
   message: string;
 }

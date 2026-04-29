@@ -274,7 +274,7 @@ export const api = {
           threshold: 15,
           current_value: Math.abs(risk.current_drawdown),
         },
-      ] as CircuitBreakerStatus[];
+      ] as unknown as CircuitBreakerStatus[];
     } catch {
       return [];
     }

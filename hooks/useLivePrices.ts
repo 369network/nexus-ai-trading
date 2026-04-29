@@ -70,7 +70,7 @@ export function useLivePrices(): PriceMap {
         }
 
         if (Object.keys(updates).length > 0) {
-          setPrices((prev) => ({ ...prev, ...updates }));
+          setPrices((prev) => ({ ...prev, ...updates } as PriceMap));
         }
       } catch {
         // Silently ignore parse errors
@@ -121,7 +121,7 @@ export function useLivePrices(): PriceMap {
       }
 
       if (mountedRef.current && Object.keys(updates).length > 0) {
-        setPrices((prev) => ({ ...prev, ...updates }));
+        setPrices((prev) => ({ ...prev, ...updates } as PriceMap));
       }
     } catch {
       // Keep last known price on error
@@ -183,7 +183,7 @@ export function useLivePrices(): PriceMap {
       }
 
       if (mountedRef.current && Object.keys(updates).length > 0) {
-        setPrices((prev) => ({ ...prev, ...updates }));
+        setPrices((prev) => ({ ...prev, ...updates } as PriceMap));
       }
     } catch {
       // Keep last known price on error
