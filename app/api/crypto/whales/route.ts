@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 
 const WHALE_ALERT_KEY = process.env.WHALE_ALERT_API_KEY!;
 const MIN_VALUE_USD   = 500_000;
-const LIMIT           = 20;
+const LIMIT           = 10; // free tier max
 
 interface WhaleTransaction {
   id: number;
@@ -50,12 +50,15 @@ function formatAmount(amount: number, symbol: string): string {
 
 export async function GET() {
   try {
+    // Use `start` (unix timestamp) instead of `cursor=0` — cursor requires paid plan.
+    // Free tier supports start/end within the last 24 hours.
+    const start = Math.floor(Date.now() / 1000) - 3600; // last 1 hour
     const url =
       `https://api.whale-alert.io/v1/transactions` +
       `?api_key=${WHALE_ALERT_KEY}` +
       `&min_value=${MIN_VALUE_USD}` +
       `&limit=${LIMIT}` +
-      `&cursor=0`;
+      `&start=${start}`;
 
     const res = await fetch(url, {
       next: { revalidate: 60 },
