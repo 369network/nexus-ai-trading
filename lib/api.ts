@@ -111,29 +111,27 @@ export const api = {
 
     if (error || !data) {
       return {
-        equity: 0,
-        cash: 0,
+        total_value: 0,
         daily_pnl: 0,
         daily_pnl_pct: 0,
         total_pnl: 0,
-        drawdown_pct: 0,
-        open_positions: 0,
         win_rate: 0,
-        portfolio_heat: 0,
-        timestamp: new Date().toISOString(),
+        total_trades: 0,
+        open_positions: 0,
+        market_exposure: {} as Record<string, number>,
       } as PortfolioSummary;
     }
     return {
-      equity: data.equity ?? 0,
-      cash: data.cash ?? 0,
+      // Map DB `equity` → interface `total_value`
+      total_value: data.equity ?? 0,
       daily_pnl: data.daily_pnl ?? 0,
       daily_pnl_pct: data.daily_pnl_pct ?? 0,
       total_pnl: data.total_pnl ?? 0,
-      drawdown_pct: data.drawdown_pct ?? 0,
+      // DB win_rate is stored as 0–1 fraction; interface expects 0–100
+      win_rate: ((data.win_rate ?? 0) * 100),
+      total_trades: 0,           // not tracked in portfolio_snapshots
       open_positions: data.open_positions ?? 0,
-      win_rate: data.win_rate ?? 0,
-      portfolio_heat: data.portfolio_heat ?? 0,
-      timestamp: data.created_at,
+      market_exposure: {} as Record<string, number>,
     } as PortfolioSummary;
   },
 
