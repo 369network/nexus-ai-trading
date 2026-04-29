@@ -1021,6 +1021,19 @@ class NexusAlpha:
                             update_positions(positions_payload)
                         except Exception:
                             pass
+
+                        # Periodic portfolio snapshot → Supabase every 5 min (10 × 30s)
+                        self._snapshot_tick = getattr(self, "_snapshot_tick", 0) + 1
+                        if self._snapshot_tick >= 10:
+                            self._snapshot_tick = 0
+                            try:
+                                from src.execution.paper import PaperExecutor as _PE
+                                _exec = getattr(self.execution_engine, "_executor", None)
+                                if isinstance(_exec, _PE):
+                                    await _exec._persist_portfolio_snapshot()
+                            except Exception as _snap_exc:
+                                logger.debug("Periodic snapshot failed (non-fatal): %s", _snap_exc)
+
             except AttributeError:
                 pass  # execution_engine may not have get_portfolio_state yet
             except asyncio.CancelledError:
