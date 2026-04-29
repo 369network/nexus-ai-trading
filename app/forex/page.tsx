@@ -20,9 +20,16 @@ type ForexPair = {
   symbol: string;
   price: number;
   change: number;
-  spread: number;
+  spread: string;
   pip: number;
 };
+
+function getSpreadLabel(symbol: string): string {
+  if (['EURUSD', 'GBPUSD', 'USDCHF'].includes(symbol)) return '0.1–0.3 pips (est.)';
+  if (['USDJPY', 'EURJPY'].includes(symbol)) return '0.5–1.5 pips (est.)';
+  if (['GBPJPY', 'EURGBP'].includes(symbol)) return '1.0–2.0 pips (est.)';
+  return '1.0–3.0 pips (est.)';
+}
 
 function useForexPrices() {
   const [pairs, setPairs] = useState<ForexPair[]>([]);
@@ -60,7 +67,7 @@ function useForexPrices() {
             symbol: p.symbol,
             price: parseFloat(price.toFixed(p.symbol === 'USDJPY' ? 3 : 5)),
             change: parseFloat(change.toFixed(3)),
-            spread: p.symbol.includes('JPY') ? 0.8 : 0.2,
+            spread: getSpreadLabel(p.symbol),
             pip: parseFloat((price - 0.0001).toFixed(5)),
           };
         });
@@ -79,13 +86,44 @@ function useForexPrices() {
   return { pairs, loading };
 }
 
-const ECONOMIC_EVENTS: EconomicEvent[] = [
-  { id: '1', datetime: new Date(Date.now() + 3600000).toISOString(), currency: 'USD', title: 'Non-Farm Payrolls', impact: 'HIGH', forecast: '185K', previous: '206K' },
-  { id: '2', datetime: new Date(Date.now() + 7200000).toISOString(), currency: 'EUR', title: 'ECB Interest Rate Decision', impact: 'HIGH', forecast: '4.25%', previous: '4.50%' },
-  { id: '3', datetime: new Date(Date.now() + 10800000).toISOString(), currency: 'GBP', title: 'UK CPI m/m', impact: 'HIGH', forecast: '0.2%', previous: '0.3%' },
-  { id: '4', datetime: new Date(Date.now() + 18000000).toISOString(), currency: 'USD', title: 'FOMC Meeting Minutes', impact: 'MEDIUM', forecast: '—', previous: '—' },
-  { id: '5', datetime: new Date(Date.now() + 86400000).toISOString(), currency: 'JPY', title: 'Bank of Japan Rate Decision', impact: 'HIGH', forecast: '-0.10%', previous: '-0.10%' },
-];
+interface CalendarEvent {
+  title: string;
+  currency: string;
+  country: string;
+  datetime: string;
+  impact: 'High' | 'Medium';
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+  is_released: boolean;
+}
+
+function useEconomicCalendar() {
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/forex/calendar');
+        const json = await res.json();
+        setEvents(json.events ?? []);
+      } catch {} finally { setLoading(false); }
+    };
+    load();
+    const t = setInterval(load, 1_800_000); // 30 min
+    return () => clearInterval(t);
+  }, []);
+  return { events, loading };
+}
+
+function currencyFlag(currency: string): string {
+  const flags: Record<string, string> = {
+    USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', JPY: '🇯🇵',
+    AUD: '🇦🇺', CAD: '🇨🇦', CHF: '🇨🇭', NZD: '🇳🇿',
+    CNY: '🇨🇳', INR: '🇮🇳',
+  };
+  return flags[currency] ?? '🌐';
+}
 
 function SessionClock({ sessions }: { sessions: ForexSession[] }) {
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -96,7 +134,6 @@ function SessionClock({ sessions }: { sessions: ForexSession[] }) {
   }, []);
 
   const utcHour = currentTime.getUTCHours();
-  const utcMinute = currentTime.getUTCMinutes();
 
   const isSessionActive = (session: ForexSession) => {
     const openH = parseInt(session.open_utc.split(':')[0]);
@@ -176,7 +213,7 @@ function SessionClock({ sessions }: { sessions: ForexSession[] }) {
   );
 }
 
-function MajorPairsTable({ pairs }: { pairs: typeof MAJOR_PAIRS }) {
+function MajorPairsTable({ pairs }: { pairs: ForexPair[] }) {
   return (
     <div className="nexus-card p-4">
       <h3 className="font-medium text-sm text-white mb-4">Major Pairs</h3>
@@ -219,59 +256,101 @@ function MajorPairsTable({ pairs }: { pairs: typeof MAJOR_PAIRS }) {
   );
 }
 
-function EconomicCalendar({ events }: { events: EconomicEvent[] }) {
-  const impactColors = { HIGH: 'text-nexus-red', MEDIUM: 'text-nexus-yellow', LOW: 'text-muted' };
-  const impactDots = { HIGH: 'bg-nexus-red', MEDIUM: 'bg-nexus-yellow', LOW: 'bg-muted' };
-
-  const getCountdown = (datetime: string) => {
-    const diff = new Date(datetime).getTime() - Date.now();
-    if (diff < 0) return 'Past';
-    const h = Math.floor(diff / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
-
+function EconomicCalendarPanel({
+  events,
+  loading,
+}: {
+  events: CalendarEvent[];
+  loading: boolean;
+}) {
   return (
     <div className="nexus-card p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-medium text-sm text-white">Economic Calendar</h3>
         <Calendar size={14} className="text-muted" />
       </div>
-      <div className="space-y-3">
-        {events.map((event) => (
-          <div key={event.id} className="flex items-start gap-3 p-2 rounded-lg bg-white/2 border border-border">
-            <div
-              className={cn('w-2 h-2 rounded-full mt-1 flex-shrink-0', impactDots[event.impact])}
-            />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-white truncate">{event.title}</span>
-                <span className="text-xs font-mono text-nexus-blue ml-2 flex-shrink-0">
-                  {getCountdown(event.datetime)}
-                </span>
+
+      {loading && (
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-14 rounded-lg bg-white/5 animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {!loading && events.length === 0 && (
+        <p className="text-xs text-muted text-center py-6">No high-impact events this week</p>
+      )}
+
+      {!loading && events.length > 0 && (
+        <div className="space-y-3">
+          {events.map((e, idx) => {
+            const formattedTime =
+              new Date(e.datetime).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'UTC',
+              }) + ' UTC';
+
+            return (
+              <div
+                key={idx}
+                className="flex items-start gap-3 p-2 rounded-lg bg-white/2 border border-border"
+              >
+                {/* Impact dot */}
+                <div
+                  className={cn(
+                    'w-2 h-2 rounded-full mt-1 flex-shrink-0',
+                    e.impact === 'High' ? 'bg-nexus-red' : 'bg-nexus-yellow'
+                  )}
+                />
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-white truncate">
+                      {currencyFlag(e.currency)} {e.currency} — {e.title}
+                    </span>
+                    <span
+                      className={cn(
+                        'text-xs font-bold flex-shrink-0',
+                        e.impact === 'High' ? 'text-nexus-red' : 'text-nexus-yellow'
+                      )}
+                    >
+                      {e.impact}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-1">
+                    {e.is_released ? (
+                      <span className="text-xs">
+                        Actual:{' '}
+                        <span
+                          className={cn(
+                            'font-mono font-medium',
+                            e.actual && e.previous && parseFloat(e.actual) >= parseFloat(e.previous)
+                              ? 'text-nexus-green'
+                              : 'text-nexus-red'
+                          )}
+                        >
+                          {e.actual ?? '—'}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted">
+                        F: <span className="text-gray-400">{e.forecast ?? '—'}</span>
+                        {' '}P: <span className="text-gray-500">{e.previous ?? '—'}</span>
+                      </span>
+                    )}
+                    <span className="text-xs text-muted ml-auto flex-shrink-0">{formattedTime}</span>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-3 mt-1">
-                <span
-                  className={cn('badge text-xs', `bg-${event.currency === 'USD' ? 'blue' : 'gray'}-500/10`)}
-                  style={{ color: '#9ca3af' }}
-                >
-                  {event.currency}
-                </span>
-                <span className={cn('text-xs', impactColors[event.impact])}>
-                  {event.impact}
-                </span>
-                {event.forecast && (
-                  <span className="text-xs text-muted">
-                    F: <span className="text-white">{event.forecast}</span>
-                    {' '}P: <span className="text-muted">{event.previous}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -281,6 +360,7 @@ export default function ForexPage() {
   const [activePair, setActivePair] = useState('EURUSD');
   const [signals, setSignals] = useState<Signal[]>([]);
   const { pairs: MAJOR_PAIRS, loading } = useForexPrices();
+  const { events: calendarEvents, loading: calendarLoading } = useEconomicCalendar();
 
   useEffect(() => {
     getRecentSignals('forex', 20).then(setSignals);
@@ -362,7 +442,7 @@ export default function ForexPage() {
         ) : (
           <MajorPairsTable pairs={MAJOR_PAIRS} />
         )}
-        <EconomicCalendar events={ECONOMIC_EVENTS} />
+        <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} />
         <SignalFeed market="forex" limit={8} />
       </div>
     </div>

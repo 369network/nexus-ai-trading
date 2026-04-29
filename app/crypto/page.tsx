@@ -36,6 +36,22 @@ const CRYPTO_PAIRS = [
   { symbol: 'SOLUSDT', label: 'SOL/USDT', basePrice: 0 },
 ];
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatAge(seconds: number): string {
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function formatUSDShort(usd: number): string {
+  if (usd >= 1e9) return `$${(usd / 1e9).toFixed(1)}B`;
+  if (usd >= 1e6) return `$${(usd / 1e6).toFixed(1)}M`;
+  if (usd >= 1e3) return `$${(usd / 1e3).toFixed(0)}K`;
+  return `$${usd.toFixed(0)}`;
+}
+
 // ── Sentiment API types ───────────────────────────────────────────────────────
 
 interface FundingEntry {
@@ -74,7 +90,7 @@ interface SentimentData {
   timestamp: string;
 }
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
+// ── Hooks ─────────────────────────────────────────────────────────────────────
 
 function useCryptoSentiment() {
   const [data, setData] = useState<SentimentData | null>(null);
@@ -99,6 +115,87 @@ function useCryptoSentiment() {
   }, []);
 
   return { data, loading };
+}
+
+interface TickerData {
+  symbol: string;
+  price: number;
+  change: number;
+  change_pct: number;
+  high: number;
+  low: number;
+  volume: number;
+}
+
+function useCryptoTicker(symbols: string[]) {
+  const [tickers, setTickers] = useState<Record<string, TickerData>>({});
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/crypto/ticker?symbols=${symbols.join(',')}`);
+        const json = await res.json();
+        const map: Record<string, TickerData> = {};
+        for (const t of json.tickers ?? []) map[t.symbol] = t;
+        setTickers(map);
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [symbols.join(',')]);
+  return tickers;
+}
+
+interface WhaleTransaction {
+  id: number;
+  symbol: string;
+  amount_display: string;
+  amount_usd: number;
+  from: string;
+  to: string;
+  age_seconds: number;
+  blockchain: string;
+}
+
+function useWhaleAlerts() {
+  const [transactions, setTransactions] = useState<WhaleTransaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/crypto/whales');
+        const json = await res.json();
+        setTransactions(json.transactions ?? []);
+      } catch {} finally {
+        setLoading(false);
+      }
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+  return { transactions, loading };
+}
+
+interface LiqZone { price: number; side: string; size: string; pct: number; }
+
+function useLiquidationZones(symbol: string) {
+  const [zones, setZones] = useState<LiqZone[]>([]);
+  const [source, setSource] = useState<string>('');
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/crypto/liquidations?symbol=${symbol}`);
+        const json = await res.json();
+        setZones(json.zones ?? []);
+        setSource(json.source ?? '');
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 120_000);
+    return () => clearInterval(t);
+  }, [symbol]);
+  return { zones, source };
 }
 
 // ── Skeleton helpers ──────────────────────────────────────────────────────────
@@ -440,29 +537,36 @@ function OpenInterestPanel({
   );
 }
 
-function WhaleAlertNotice() {
+function WhaleAlertPanel({ transactions, loading }: { transactions: WhaleTransaction[]; loading: boolean }) {
   return (
-    <div className="nexus-card p-4 flex flex-col justify-between h-full">
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <TrendingUp size={14} className="text-nexus-yellow" />
-          <h3 className="font-medium text-sm text-white">Whale Alerts</h3>
-        </div>
-        <p className="text-xs text-muted leading-relaxed">
-          Whale alert data requires a Whale Alert API subscription. Configure
-          your key in{' '}
-          <span className="text-white">Settings &rarr; API Connections</span>.
-        </p>
+    <div className="nexus-card p-4 flex flex-col h-full">
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp size={14} className="text-nexus-yellow" />
+        <h3 className="font-medium text-sm text-white">Whale Alerts</h3>
+        <span className="ml-auto text-xs text-muted">≥$500K</span>
       </div>
-      <a
-        href="https://whale-alert.io/api"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-4 inline-flex items-center gap-1.5 text-xs text-nexus-blue hover:text-nexus-blue/80 transition-colors"
-      >
-        Get a Whale Alert API key
-        <ExternalLink size={11} />
-      </a>
+      {loading ? (
+        <div className="space-y-2">
+          {[...Array(4)].map((_, i) => <PulseSkeleton key={i} className="h-10 w-full" />)}
+        </div>
+      ) : transactions.length === 0 ? (
+        <p className="text-xs text-muted mt-2">No large transactions in the last hour.</p>
+      ) : (
+        <div className="space-y-2 overflow-y-auto max-h-64">
+          {transactions.slice(0, 8).map((tx) => (
+            <div key={tx.id} className="flex items-start justify-between gap-2 py-1.5 border-b border-white/5 last:border-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-xs font-bold text-white shrink-0">{tx.amount_display}</span>
+                <span className="text-xs text-muted truncate">{tx.from} → {tx.to}</span>
+              </div>
+              <div className="flex flex-col items-end shrink-0">
+                <span className="text-xs text-nexus-yellow font-mono">{formatUSDShort(tx.amount_usd)}</span>
+                <span className="text-[10px] text-muted">{formatAge(tx.age_seconds)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -475,6 +579,11 @@ export default function CryptoPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const { data: sentimentData, loading: sentimentLoading } =
     useCryptoSentiment();
+
+  const tickers = useCryptoTicker(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT']);
+  const { transactions: whaleTransactions, loading: whaleLoading } = useWhaleAlerts();
+  const { zones: liqZones, source: liqSource } = useLiquidationZones(activePair.replace('USDT', ''));
+  const activeTicker = tickers[activePair];
 
   useEffect(() => {
     const load = async () => {
@@ -499,42 +608,6 @@ export default function CryptoPage() {
     activePairData.basePrice;
 
   const pairSignal = cryptoSignals.find((s) => s.symbol === activePair);
-
-  const liquidationZones: {
-    price: number;
-    side: string;
-    size: string;
-    pct: number;
-  }[] =
-    currentPrice > 0
-      ? [
-          {
-            price: Math.round(currentPrice * 1.07),
-            side: 'LONG',
-            size: '$284M',
-            pct: 75,
-          },
-          {
-            price: Math.round(currentPrice * 1.04),
-            side: 'LONG',
-            size: '$156M',
-            pct: 55,
-          },
-          { price: Math.round(currentPrice), side: 'CURRENT', size: '—', pct: 0 },
-          {
-            price: Math.round(currentPrice * 0.96),
-            side: 'SHORT',
-            size: '$198M',
-            pct: 65,
-          },
-          {
-            price: Math.round(currentPrice * 0.92),
-            side: 'SHORT',
-            size: '$421M',
-            pct: 85,
-          },
-        ]
-      : [];
 
   return (
     <div className="space-y-4">
@@ -563,7 +636,11 @@ export default function CryptoPage() {
               <span className="text-2xl font-mono font-bold text-white">
                 {formatCurrency(currentPrice)}
               </span>
-              <span className="text-sm text-nexus-green ml-2">+2.34%</span>
+              {activeTicker ? (
+                <span className={`text-sm ml-2 ${activeTicker.change_pct >= 0 ? 'text-nexus-green' : 'text-nexus-red'}`}>
+                  {activeTicker.change_pct >= 0 ? '+' : ''}{activeTicker.change_pct.toFixed(2)}%
+                </span>
+              ) : null}
             </div>
             {pairSignal && (
               <span
@@ -615,16 +692,19 @@ export default function CryptoPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-medium text-sm text-white">
               Liquidation Zones
+              {liqSource === 'estimated' && (
+                <span className="ml-1.5 text-xs text-muted font-normal">(est.)</span>
+              )}
             </h3>
             <AlertTriangle size={14} className="text-nexus-yellow" />
           </div>
           <div className="space-y-2">
-            {liquidationZones.length === 0 ? (
+            {liqZones.length === 0 ? (
               <p className="text-xs text-muted text-center py-4">
                 Awaiting price data…
               </p>
             ) : (
-              liquidationZones.map((zone) => (
+              liqZones.map((zone) => (
                 <div
                   key={`${zone.side}-${zone.price}`}
                   className="flex items-center justify-between"
@@ -668,9 +748,9 @@ export default function CryptoPage() {
         </div>
       </div>
 
-      {/* Whale alerts notice + Signals */}
+      {/* Whale alerts + Signals */}
       <div className="grid grid-cols-2 gap-4">
-        <WhaleAlertNotice />
+        <WhaleAlertPanel transactions={whaleTransactions} loading={whaleLoading} />
         <SignalFeed market="crypto" limit={8} />
       </div>
 

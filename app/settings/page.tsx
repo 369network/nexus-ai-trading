@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { cn, formatTimeAgo } from '@/lib/utils';
+import { api } from '@/lib/api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -576,7 +577,7 @@ function ApiConnectionCard({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const [flags, setFlags] = useState(FEATURE_FLAGS);
+  const [featureFlags, setFeatureFlags] = useState(FEATURE_FLAGS);
   const [weights, setWeights] = useState(LLM_WEIGHTS);
   const [limits, setLimits] = useState(RISK_LIMITS);
   const [thresholds, setThresholds] = useState(CIRCUIT_THRESHOLDS);
@@ -587,6 +588,20 @@ export default function SettingsPage() {
     API_SERVICES.reduce((acc, s) => ({ ...acc, [s.id]: { status: 'untested' as const } }), {})
   );
   const [saveNotice, setSaveNotice] = useState('');
+
+  // Load feature flags from Supabase on mount
+  useEffect(() => {
+    api.getFeatureFlags().then((flags) => {
+      if (Object.keys(flags).length > 0) {
+        setFeatureFlags((prev) =>
+          prev.map((f) => ({
+            ...f,
+            value: typeof flags[f.key] === 'boolean' ? (flags[f.key] as boolean) : f.value,
+          }))
+        );
+      }
+    }).catch(() => {/* use defaults */});
+  }, []);
 
   // Load keys from localStorage on mount
   useEffect(() => {
@@ -660,7 +675,6 @@ export default function SettingsPage() {
         });
       }
     } catch (err: unknown) {
-      const ping = Date.now() - t0;
       const message = err instanceof Error ? err.message : 'Connection failed';
       const newStatus: ConnectionStatus = {
         status: 'error',
@@ -676,7 +690,13 @@ export default function SettingsPage() {
   }, []);
 
   const toggleFlag = (key: string) => {
-    setFlags((prev) => prev.map((f) => f.key === key ? { ...f, value: !f.value } : f));
+    setFeatureFlags((prev) => prev.map((f) => {
+      if (f.key !== key) return f;
+      const newValue = !f.value;
+      // Fire-and-forget: persist to Supabase, ignore errors
+      api.updateFeatureFlag(key, newValue).catch(() => {});
+      return { ...f, value: newValue };
+    }));
   };
   const updateWeight = (agent: string, weight: number) => {
     setWeights((prev) => prev.map((w) => w.agent === agent ? { ...w, weight } : w));
@@ -691,7 +711,7 @@ export default function SettingsPage() {
     setThresholds((prev) => prev.map((t) => t.key === key ? { ...t, value } : t));
   };
 
-  const flagsByCategory = flags.reduce((acc, f) => {
+  const flagsByCategory = featureFlags.reduce((acc, f) => {
     if (!acc[f.category]) acc[f.category] = [];
     acc[f.category].push(f);
     return acc;
@@ -870,7 +890,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="mt-4 p-3 bg-nexus-yellow/5 border border-nexus-yellow/20 rounded-lg">
-          <p className="text-xs text-nexus-yellow font-medium mb-1">⚠ For live trading, also configure keys on the VPS</p>
+          <p className="text-xs text-nexus-yellow font-medium mb-1">For live trading, also configure keys on the VPS</p>
           <p className="text-xs text-muted">
             Dashboard keys are for reference only. The trading bot reads its keys from{' '}
             <code className="font-mono bg-background px-1 py-0.5 rounded">/opt/nexus-alpha/.env</code>{' '}
@@ -896,7 +916,7 @@ const TELEGRAM_STORAGE_KEY = 'nexus_telegram_config';
 
 const TELEGRAM_EVENTS = [
   { key: 'new_trade',       label: 'Trade Executed',     description: 'When a new trade is opened or closed', default: true },
-  { key: 'signal',          label: 'Signal Generated',   description: 'When an AI signal is produced (strength ≥ 75)', default: false },
+  { key: 'signal',          label: 'Signal Generated',   description: 'When an AI signal is produced (strength >= 75)', default: false },
   { key: 'circuit_breaker', label: 'Circuit Breaker',    description: 'When any circuit breaker trips', default: true },
   { key: 'daily_summary',   label: 'Daily Summary',      description: 'End-of-day P&L and performance summary', default: true },
   { key: 'emergency_stop',  label: 'Emergency Stop',     description: 'When emergency stop is triggered', default: true },
@@ -955,10 +975,10 @@ function TelegramNotificationsPanel() {
     setTestError('');
     try {
       const text = encodeURIComponent(
-        `🤖 *NEXUS ALPHA* — Test Notification\n\n` +
-        `✅ Telegram integration is working correctly.\n` +
-        `📅 ${new Date().toLocaleString()}\n` +
-        `🔗 Dashboard connected.`
+        `NEXUS ALPHA — Test Notification\n\n` +
+        `Telegram integration is working correctly.\n` +
+        `${new Date().toLocaleString()}\n` +
+        `Dashboard connected.`
       );
       const url = `https://api.telegram.org/bot${config.botToken}/sendMessage?chat_id=${config.chatId}&text=${text}&parse_mode=Markdown`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -1012,7 +1032,7 @@ function TelegramNotificationsPanel() {
           rel="noopener noreferrer"
           className="text-nexus-blue underline"
         >
-          Create a bot via @BotFather ↗
+          Create a bot via @BotFather
         </a>
         . Your token is stored only in your browser.
       </p>
@@ -1143,7 +1163,7 @@ function TelegramNotificationsPanel() {
       )}
 
       <div className="mt-4 p-3 bg-nexus-blue/5 border border-nexus-blue/20 rounded-lg">
-        <p className="text-xs text-nexus-blue font-medium mb-1">📱 How notifications work</p>
+        <p className="text-xs text-nexus-blue font-medium mb-1">How notifications work</p>
         <p className="text-xs text-muted">
           The dashboard sends notifications directly from your browser. For persistent alerts when
           the dashboard is closed, configure the same bot token as{' '}

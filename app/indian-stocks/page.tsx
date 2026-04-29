@@ -71,6 +71,30 @@ function useIndianIndices(intervalMs = 60_000) {
 }
 
 // ---------------------------------------------------------------------------
+// Hook: NSE market data (breadth + option chain)
+// ---------------------------------------------------------------------------
+
+function useNseMarket() {
+  const [breadth, setBreadth] = useState<{advances:number;declines:number;unchanged:number;high52:number;low52:number}|null>(null);
+  const [optionChain, setOptionChain] = useState<{underlying:number;expiry:string;pcr:number;max_pain:number;atm_iv:number;call_oi_buildup:number[];put_oi_buildup:number[]}|null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{
+    const load=async()=>{
+      try{
+        const res=await fetch('/api/indian/market');
+        const json=await res.json();
+        setBreadth(json.breadth??null);
+        setOptionChain(json.option_chain??null);
+      }catch{}finally{setLoading(false);}
+    };
+    load();
+    const t=setInterval(load,300_000);
+    return()=>clearInterval(t);
+  },[]);
+  return{breadth,optionChain,loading};
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -81,17 +105,6 @@ const FALLBACK_INDICES: IndexQuote[] = INDEX_ORDER.map((key) => ({
   label:     key === 'NIFTY50' ? 'NIFTY 50' : key === 'BANKNIFTY' ? 'BANK NIFTY' : key === 'MIDCAP' ? 'MIDCAP 50' : 'NIFTY IT',
   price:     0, change: 0, changePct: 0, high: 0, low: 0, prevClose: 0, volume: 0,
 }));
-
-const OPTION_CHAIN: OptionChainSummary = {
-  symbol: 'NIFTY',
-  expiry: 'Next Expiry (Thu)',
-  pcr: 0.87,
-  max_pain: 24400,
-  call_oi_buildup: [24600, 24700, 24800, 24900, 25000],
-  put_oi_buildup:  [24400, 24300, 24200, 24100, 24000],
-  strikes:         [24000, 24100, 24200, 24300, 24400, 24500, 24600, 24700, 24800],
-  atm_iv: 12.4,
-};
 
 function getMarketStatus() {
   const now     = new Date();
@@ -201,30 +214,66 @@ function FIIDIINotice() {
   );
 }
 
-function OptionChainPanel({ data }: { data: OptionChainSummary }) {
-  const pcrColor = data.pcr > 1.2 ? 'text-nexus-green' : data.pcr < 0.8 ? 'text-nexus-red' : 'text-nexus-yellow';
+function OptionChainPanel({
+  optionChain,
+  loading,
+}: {
+  optionChain: {underlying:number;expiry:string;pcr:number;max_pain:number;atm_iv:number;call_oi_buildup:number[];put_oi_buildup:number[]} | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="nexus-card p-4 animate-pulse">
+        <div className="h-3 w-32 bg-border rounded mb-4" />
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          {[0,1,2].map((i) => <div key={i} className="h-16 bg-border rounded" />)}
+        </div>
+        <div className="h-20 bg-border rounded" />
+      </div>
+    );
+  }
+
+  if (!optionChain) {
+    return (
+      <div className="nexus-card p-4 flex flex-col items-center justify-center min-h-[200px] gap-2">
+        <AlertCircle size={18} className="text-muted opacity-60" />
+        <p className="text-xs text-muted text-center">NSE data temporarily unavailable</p>
+      </div>
+    );
+  }
+
+  const pcr = optionChain.pcr;
+  const pcrColor = pcr > 1.2 ? 'text-nexus-green' : pcr < 0.8 ? 'text-nexus-red' : 'text-nexus-yellow';
+  const callBuildup = optionChain.call_oi_buildup ?? [];
+  const putBuildup = optionChain.put_oi_buildup ?? [];
 
   return (
     <div className="nexus-card p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-medium text-sm text-white">Option Chain — {data.symbol}</h3>
-        <span className="text-xs text-muted">{data.expiry}</span>
+        <h3 className="font-medium text-sm text-white">Option Chain — NIFTY</h3>
+        <span className="text-xs text-muted">{optionChain.expiry ?? '—'}</span>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="text-center">
           <div className="text-xs text-muted mb-1">PCR</div>
-          <div className={cn('font-mono font-bold text-lg', pcrColor)}>{data.pcr}</div>
-          <div className="text-xs text-muted">{data.pcr > 1.0 ? 'Bullish' : 'Bearish'}</div>
+          <div className={cn('font-mono font-bold text-lg', pcrColor)}>
+            {optionChain.pcr?.toFixed(2) ?? '—'}
+          </div>
+          <div className="text-xs text-muted">{pcr > 1.0 ? 'Bullish' : 'Bearish'}</div>
         </div>
         <div className="text-center">
           <div className="text-xs text-muted mb-1">Max Pain</div>
-          <div className="font-mono font-bold text-lg text-nexus-yellow">{data.max_pain.toLocaleString()}</div>
+          <div className="font-mono font-bold text-lg text-nexus-yellow">
+            {optionChain.max_pain?.toLocaleString() ?? '—'}
+          </div>
           <div className="text-xs text-muted">Strike</div>
         </div>
         <div className="text-center">
           <div className="text-xs text-muted mb-1">ATM IV</div>
-          <div className="font-mono font-bold text-lg text-nexus-blue">{data.atm_iv}%</div>
+          <div className="font-mono font-bold text-lg text-nexus-blue">
+            {optionChain.atm_iv ? optionChain.atm_iv + '%' : '—'}
+          </div>
           <div className="text-xs text-muted">Implied Vol</div>
         </div>
       </div>
@@ -235,49 +284,65 @@ function OptionChainPanel({ data }: { data: OptionChainSummary }) {
           <div className="flex-1">
             <div className="text-xs text-nexus-red mb-1">Call Resistance</div>
             <div className="flex gap-1.5 flex-wrap">
-              {data.call_oi_buildup.map((strike) => (
+              {callBuildup.length > 0 ? callBuildup.map((strike) => (
                 <span key={strike} className="text-xs bg-nexus-red/10 text-nexus-red border border-nexus-red/20 rounded px-1.5 py-0.5">
                   {strike.toLocaleString()}
                 </span>
-              ))}
+              )) : <span className="text-xs text-muted">—</span>}
             </div>
           </div>
           <div className="w-px h-12 bg-border" />
           <div className="flex-1">
             <div className="text-xs text-nexus-green mb-1">Put Support</div>
             <div className="flex gap-1.5 flex-wrap">
-              {data.put_oi_buildup.map((strike) => (
+              {putBuildup.length > 0 ? putBuildup.map((strike) => (
                 <span key={strike} className="text-xs bg-nexus-green/10 text-nexus-green border border-nexus-green/20 rounded px-1.5 py-0.5">
                   {strike.toLocaleString()}
                 </span>
-              ))}
+              )) : <span className="text-xs text-muted">—</span>}
             </div>
           </div>
         </div>
       </div>
 
       <div className="pt-2 border-t border-border text-xs text-muted text-center">
-        Option chain data requires NSE API key
+        Live via /api/indian/market
       </div>
     </div>
   );
 }
 
-function MarketBreadth({ indices }: { indices: IndicesMap }) {
-  // Estimate breadth from available indices
-  const allIndices = Object.values(indices);
-  const up = allIndices.filter((i) => i.changePct > 0).length;
-  const dn = allIndices.filter((i) => i.changePct < 0).length;
-  const uc = allIndices.filter((i) => i.changePct === 0).length;
-  const total = allIndices.length || 1;
+function MarketBreadth({
+  breadth,
+  loading,
+}: {
+  breadth: {advances:number;declines:number;unchanged:number;high52:number;low52:number} | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="nexus-card p-4 animate-pulse">
+        <div className="h-3 w-28 bg-border rounded mb-4" />
+        <div className="space-y-3">
+          {[0,1,2].map((i) => <div key={i} className="h-8 bg-border rounded" />)}
+        </div>
+      </div>
+    );
+  }
 
-  // Static NSE-sourced placeholder for market breadth (requires live NSE scraping)
-  const advances   = 1247;
-  const declines   = 802;
-  const unchanged  = 113;
+  if (!breadth) {
+    return (
+      <div className="nexus-card p-4 flex flex-col items-center justify-center min-h-[200px] gap-2">
+        <AlertCircle size={18} className="text-muted opacity-60" />
+        <p className="text-xs text-muted text-center">NSE data temporarily unavailable</p>
+      </div>
+    );
+  }
+
+  const { advances, declines, unchanged, high52, low52 } = breadth;
   const breadTotal = advances + declines + unchanged;
-  const advPct     = (advances / breadTotal) * 100;
-  const decPct     = (declines / breadTotal) * 100;
+  const advPct     = breadTotal > 0 ? (advances / breadTotal) * 100 : 0;
+  const decPct     = breadTotal > 0 ? (declines / breadTotal) * 100 : 0;
 
   return (
     <div className="nexus-card p-4">
@@ -306,7 +371,7 @@ function MarketBreadth({ indices }: { indices: IndicesMap }) {
             <span className="text-muted">Unchanged: {unchanged}</span>
           </div>
           <div className="h-2 bg-border rounded-full overflow-hidden">
-            <div className="h-full bg-muted rounded-full" style={{ width: `${(unchanged / breadTotal) * 100}%` }} />
+            <div className="h-full bg-muted rounded-full" style={{ width: `${breadTotal > 0 ? (unchanged / breadTotal) * 100 : 0}%` }} />
           </div>
         </div>
 
@@ -314,7 +379,7 @@ function MarketBreadth({ indices }: { indices: IndicesMap }) {
           <div className="text-center">
             <div className="text-xs text-muted">A/D Ratio</div>
             <div className={cn('text-lg font-mono font-bold mt-1', advances > declines ? 'text-nexus-green' : 'text-nexus-red')}>
-              {(advances / declines).toFixed(2)}
+              {declines > 0 ? (advances / declines).toFixed(2) : '—'}
             </div>
             <div className="text-xs text-muted">
               {advances > declines ? 'Broad Buying' : 'Broad Selling'}
@@ -323,12 +388,12 @@ function MarketBreadth({ indices }: { indices: IndicesMap }) {
         </div>
 
         <div className="pt-2 border-t border-border grid grid-cols-2 gap-2 text-xs">
-          <div><div className="text-muted">52W High</div><div className="text-nexus-green font-mono">287</div></div>
-          <div><div className="text-muted">52W Low</div><div className="text-nexus-red font-mono">43</div></div>
+          <div><div className="text-muted">52W High</div><div className="text-nexus-green font-mono">{high52}</div></div>
+          <div><div className="text-muted">52W Low</div><div className="text-nexus-red font-mono">{low52}</div></div>
         </div>
 
         <div className="text-xs text-muted text-center pt-1 border-t border-border">
-          Breadth via NSE EOD data
+          Live via /api/indian/market
         </div>
       </div>
     </div>
@@ -346,6 +411,7 @@ export default function IndianStocksPage() {
   const marketStatus = getMarketStatus();
 
   const { indices, loading, error, lastUpdated, refresh } = useIndianIndices(60_000);
+  const { breadth, optionChain, loading: nseLoading } = useNseMarket();
 
   // Ordered list for display
   const displayIndices = INDEX_ORDER.map((key) => indices[key] ?? FALLBACK_INDICES.find((f) => f.symbol === key)!);
@@ -419,8 +485,8 @@ export default function IndianStocksPage() {
       {/* FII/DII + option chain + breadth */}
       <div className="grid grid-cols-4 gap-4">
         <FIIDIINotice />
-        <OptionChainPanel data={OPTION_CHAIN} />
-        <MarketBreadth indices={indices} />
+        <OptionChainPanel optionChain={optionChain} loading={nseLoading} />
+        <MarketBreadth breadth={breadth} loading={nseLoading} />
       </div>
 
       {/* Trades + signals */}

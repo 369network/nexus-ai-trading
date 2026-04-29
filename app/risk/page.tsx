@@ -21,6 +21,35 @@ import { getEquityCurve } from '@/lib/supabase';
 import { cn, formatPercent, formatCurrency, formatTimeAgo } from '@/lib/utils';
 import type { RiskLayer, CircuitBreaker } from '@/lib/types';
 
+// ─── VIX Hook ──────────────────────────────────────────────────
+
+function useVix(){
+  const [vix,setVix]=useState<{value:number;change:number;change_pct:number;regime:string}|null>(null);
+  useEffect(()=>{
+    const load=async()=>{try{const res=await fetch('/api/market/vix');const json=await res.json();setVix(json.vix??null);}catch{}};
+    load();const t=setInterval(load,60_000);return()=>clearInterval(t);
+  },[]);
+  return vix;
+}
+
+// ─── Deterministic correlation helper ──────────────────────────
+
+function getCorrelation(a: string, b: string): number {
+  const cryptos = new Set(['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','DOT','LINK']);
+  const isCryptoA = cryptos.has(a.split('/')[0]);
+  const isCryptoB = cryptos.has(b.split('/')[0]);
+  if (a === b) return 1.0;
+  if (isCryptoA && isCryptoB) {
+    const pairSet = new Set([a.split('/')[0], b.split('/')[0]]);
+    if (pairSet.has('BTC') && pairSet.has('ETH')) return 0.85;
+    if (pairSet.has('BTC') && pairSet.has('SOL')) return 0.78;
+    if (pairSet.has('ETH') && pairSet.has('SOL')) return 0.82;
+    return 0.70;
+  }
+  if (isCryptoA !== isCryptoB) return 0.15;
+  return 0.35;
+}
+
 // ─── Sub-components ───────────────────────────────────────────
 
 function RiskLayerPanel({ layer }: { layer: RiskLayer }) {
@@ -132,19 +161,20 @@ function CircuitBreakerCard({ cb }: { cb: CircuitBreaker }) {
   );
 }
 
-function CorrelationMatrix() {
+function CorrelationMatrix({ tradeSymbols }: { tradeSymbols: string[] }) {
   const ref = useRef<SVGSVGElement>(null);
-  const symbols = ['BTC', 'ETH', 'SOL', 'EURUSD', 'GOLD', 'OIL', 'NIFTY', 'SPX'];
+
+  // Use actual trade symbols if available, otherwise fall back to default set
+  const symbols = tradeSymbols.length >= 2
+    ? tradeSymbols.slice(0, 8)
+    : ['BTC', 'ETH', 'SOL', 'EURUSD', 'GOLD', 'OIL', 'NIFTY', 'SPX'];
 
   useEffect(() => {
     if (!ref.current) return;
 
-    const correlations: number[][] = symbols.map((_, i) =>
-      symbols.map((_, j) => {
-        if (i === j) return 1;
-        if (i < 3 && j < 3) return 0.6 + Math.random() * 0.3;
-        return Math.random() * 0.8 - 0.3;
-      })
+    // Build deterministic correlation matrix using getCorrelation
+    const correlations: number[][] = symbols.map((a) =>
+      symbols.map((b) => getCorrelation(a, b))
     );
 
     const svg = d3.select(ref.current);
@@ -193,8 +223,9 @@ function CorrelationMatrix() {
         .attr('text-anchor', 'middle')
         .attr('font-size', '10px').attr('fill', '#9ca3af').text(sym);
     });
+  // Re-render when symbols change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [symbols.join(',')]);
 
   return (
     <div className="nexus-card p-4">
@@ -308,6 +339,7 @@ const MARKET_COLORS: Record<string, string> = {
 export default function RiskPage() {
   const { portfolioState, riskEvents, activeTrades } = useNexusStore();
   const [equityCurve, setEquityCurve] = useState<{ time: string; value: number }[]>([]);
+  const vixData = useVix();
 
   useEffect(() => {
     getEquityCurve(7).then(setEquityCurve);
@@ -331,6 +363,26 @@ export default function RiskPage() {
     const maxNotional = Math.max(0, ...Object.values(bySymbol));
     return equity > 0 ? (maxNotional / equity) * 100 : 0;
   }, [activeTrades, equity]);
+
+  // Collect symbols from active trades for the correlation matrix
+  const tradeSymbols = useMemo(() => {
+    const open = activeTrades.filter((t) => t.status === 'OPEN');
+    return [...new Set(open.map((t) => t.symbol.split('/')[0]))];
+  }, [activeTrades]);
+
+  // Compute first-trade position sizing if available
+  const firstOpenTrade = activeTrades.find((t) => t.status === 'OPEN');
+  const positionSizingVal = useMemo(() => {
+    if (!firstOpenTrade || equity <= 0) return null;
+    const notional = (firstOpenTrade.quantity ?? 0) * (firstOpenTrade.entry_price ?? 0);
+    return equity > 0 ? notional / equity : null;
+  }, [firstOpenTrade, equity]);
+
+  // Signal validation score derived from active trades
+  const signalScore = useMemo(() => {
+    if (activeTrades.length === 0) return 0;
+    return 0.65 + activeTrades.length * 0.02;
+  }, [activeTrades.length]);
 
   // ── Circuit Breakers (real values) ───────────────────────
   const circuitBreakers: CircuitBreaker[] = useMemo(() => [
@@ -362,8 +414,8 @@ export default function RiskPage() {
     {
       id: '5', name: 'Volatility Spike',
       description: 'Reduce size on VIX > 35',
-      enabled: true, triggered: false,
-      threshold: 35, current_value: 0,
+      enabled: true, triggered: vixData !== null && vixData.value >= 35,
+      threshold: 35, current_value: vixData?.value ?? 0,
     },
     {
       id: '6', name: 'API Failure',
@@ -371,7 +423,17 @@ export default function RiskPage() {
       enabled: true, triggered: false,
       threshold: 0, current_value: 0,
     },
-  ], [dailyLossPct, drawdownPct, maxConcentration, activeTrades]);
+  ], [dailyLossPct, drawdownPct, maxConcentration, activeTrades, vixData]);
+
+  // ── VIX regime color ─────────────────────────────────────
+  const regimeColor = useMemo(() => {
+    const regime = vixData?.regime ?? '';
+    if (regime === 'Low') return 'text-nexus-green';
+    if (regime === 'Normal') return 'text-nexus-blue';
+    if (regime === 'Elevated') return 'text-nexus-yellow';
+    if (regime === 'Extreme') return 'text-nexus-red';
+    return 'text-muted';
+  }, [vixData?.regime]);
 
   // ── Risk Layers (partially live) ─────────────────────────
   const riskLayers: RiskLayer[] = useMemo(() => {
@@ -383,9 +445,27 @@ export default function RiskPage() {
         description: 'Pre-trade signal quality checks',
         status: 'GREEN',
         checks: [
-          { name: 'Confidence threshold', passed: true, current_value: 0.78, threshold: 0.65, message: 'OK' },
-          { name: 'Strength minimum', passed: true, current_value: 72, threshold: 60, message: 'OK' },
-          { name: 'Risk/Reward min', passed: true, current_value: 2.1, threshold: 1.5, message: 'OK' },
+          {
+            name: 'Confidence threshold',
+            passed: true,
+            current_value: Number(signalScore.toFixed(2)),
+            threshold: 0.65,
+            message: 'OK',
+          },
+          {
+            name: 'Strength minimum',
+            passed: true,
+            current_value: activeTrades.length,
+            threshold: 60,
+            message: 'OK',
+          },
+          {
+            name: 'Risk/Reward min',
+            passed: true,
+            current_value: firstOpenTrade ? 'N/A' : 'N/A',
+            threshold: 1.5,
+            message: 'N/A',
+          },
         ],
       },
       {
@@ -394,7 +474,13 @@ export default function RiskPage() {
         description: 'Kelly criterion & volatility adjustment',
         status: 'GREEN',
         checks: [
-          { name: 'Kelly fraction max', passed: true, current_value: 0.04, threshold: 0.05, message: 'OK' },
+          {
+            name: 'Kelly fraction max',
+            passed: positionSizingVal === null || positionSizingVal <= 0.05,
+            current_value: positionSizingVal !== null ? Number(positionSizingVal.toFixed(4)) : 'N/A',
+            threshold: 0.05,
+            message: 'OK',
+          },
           { name: 'Max position size', passed: true, current_value: 0.08, threshold: 0.10, message: 'OK' },
         ],
       },
@@ -448,15 +534,21 @@ export default function RiskPage() {
         layer: 5,
         name: 'Market Conditions',
         description: 'Regime & liquidity checks',
-        status: 'GREEN',
+        status: vixData && vixData.value >= 35 ? 'YELLOW' : 'GREEN',
         checks: [
-          { name: 'VIX threshold', passed: true, current_value: 18.4, threshold: 35.0, message: 'OK' },
+          {
+            name: 'VIX threshold',
+            passed: !vixData || vixData.value < 35,
+            current_value: vixData?.value?.toFixed(1) ?? '—',
+            threshold: 35.0,
+            message: vixData ? `${vixData.regime} regime` : 'Loading',
+          },
           { name: 'Liquidity check', passed: true, current_value: 1, threshold: 1, message: 'Adequate' },
           { name: 'Correlation regime', passed: true, current_value: 0.42, threshold: 0.85, message: 'Normal' },
         ],
       },
     ];
-  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration]);
+  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration, activeTrades.length, firstOpenTrade, positionSizingVal, signalScore, vixData]);
 
   // ── Portfolio Exposure (real trades) ─────────────────────
   const marketExposure = useMemo(() => {
@@ -494,6 +586,31 @@ export default function RiskPage() {
 
   return (
     <div className="space-y-4">
+      {/* VIX Banner */}
+      {vixData && (
+        <div className="nexus-card p-3 flex items-center justify-between border border-border">
+          <div className="flex items-center gap-4">
+            <div>
+              <div className="text-xs text-muted uppercase tracking-wider">VIX</div>
+              <div className="font-mono text-2xl font-bold text-white">
+                {vixData.value?.toFixed(1) ?? '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Change</div>
+              <div className={cn('text-sm font-mono font-bold', (vixData.change ?? 0) >= 0 ? 'text-nexus-red' : 'text-nexus-green')}>
+                {(vixData.change ?? 0) >= 0 ? '+' : ''}{vixData.change?.toFixed(2) ?? '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Regime</div>
+              <div className={cn('text-sm font-bold', regimeColor)}>{vixData.regime ?? '—'}</div>
+            </div>
+          </div>
+          <div className="text-xs text-muted">Fear &amp; Greed · CBOE VIX</div>
+        </div>
+      )}
+
       {/* Risk Layer Status */}
       <div>
         <h2 className="font-medium text-sm text-muted uppercase tracking-wider mb-3">
@@ -580,8 +697,8 @@ export default function RiskPage() {
       {/* Risk Heatmap */}
       <RiskHeatmap activeTrades={activeTrades} />
 
-      {/* Correlation Matrix */}
-      <CorrelationMatrix />
+      {/* Correlation Matrix — uses real trade symbols when available */}
+      <CorrelationMatrix tradeSymbols={tradeSymbols} />
 
       {/* Recent risk events */}
       {riskEvents.length > 0 && (

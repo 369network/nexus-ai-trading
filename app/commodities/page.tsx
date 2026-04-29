@@ -27,25 +27,35 @@ type CommodityItem = {
   icon: string;
 };
 
-function useCommodityPrices() {
-  const [metals, setMetals] = useState<Record<string, number>>({});
+interface MetalData {
+  name: string;
+  symbol: string;
+  price: number | null;
+  change_pct: number | null;
+  change: number | null;
+  high: number | null;
+  low: number | null;
+  unit: string;
+}
 
+function useMetals() {
+  const [metals, setMetals] = useState<MetalData[]>([]);
+  const [gsRatio, setGsRatio] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const fetch_ = async () => {
+    const load = async () => {
       try {
-        const res = await fetch('https://api.metals.live/v1/spot/gold,silver,platinum,palladium');
-        const data: Array<{ metal: string; price: number }> = await res.json();
-        const map: Record<string, number> = {};
-        data.forEach((d) => { map[d.metal] = d.price; });
-        setMetals(map);
-      } catch {}
+        const res = await fetch('/api/commodities/metals');
+        const json = await res.json();
+        setMetals(json.metals ?? []);
+        setGsRatio(json.gold_silver_ratio ?? null);
+      } catch {} finally { setLoading(false); }
     };
-    fetch_();
-    const t = setInterval(fetch_, 30_000);
+    load();
+    const t = setInterval(load, 60_000);
     return () => clearInterval(t);
   }, []);
-
-  return metals;
+  return { metals, gsRatio, loading };
 }
 
 type OilData = { price: number; changePct: number } | null;
@@ -71,7 +81,7 @@ function useOilPrices() {
   return { wti, natgas };
 }
 
-// Monthly seasonal data (historical avg returns)
+// Monthly seasonal data (historical avg returns 2015–2023)
 const SEASONAL_MONTHLY = [
   { month: 'Jan', gold: 1.2, silver: 1.8, oil: -2.1 },
   { month: 'Feb', gold: 0.8, silver: 1.1, oil: 1.4 },
@@ -92,7 +102,7 @@ function CommodityCard({
   isSelected,
   onClick,
 }: {
-  commodity: typeof COMMODITIES[0];
+  commodity: CommodityItem;
   isSelected: boolean;
   onClick: () => void;
 }) {
@@ -119,7 +129,7 @@ function CommodityCard({
         )}
       </div>
       <div className="font-mono text-xl font-bold text-white">
-        {formatCurrency(commodity.price)}
+        {commodity.price > 0 ? formatCurrency(commodity.price) : '—'}
       </div>
       <div
         className={cn(
@@ -127,7 +137,7 @@ function CommodityCard({
           commodity.change >= 0 ? 'text-nexus-green' : 'text-nexus-red'
         )}
       >
-        {formatPercent(commodity.change)} today
+        {commodity.price > 0 ? `${formatPercent(commodity.change)} today` : 'Loading…'}
       </div>
     </button>
   );
@@ -137,7 +147,7 @@ function GoldSilverRatioGauge({ ratio }: { ratio: number }) {
   // Historical range: 40 (cheap gold) to 120 (expensive gold)
   const min = 40;
   const max = 120;
-  const pct = ((ratio - min) / (max - min)) * 100;
+  const pct = Math.min(100, Math.max(0, ((ratio - min) / (max - min)) * 100));
   const signal =
     ratio > 85 ? 'BUY SILVER' : ratio < 55 ? 'BUY GOLD' : 'NEUTRAL';
   const signalColor =
@@ -230,14 +240,17 @@ function EIACountdown() {
           </div>
         ))}
       </div>
-      <div className="mt-4 pt-3 border-t border-border space-y-2">
-        <div className="flex justify-between text-xs">
-          <span className="text-muted">Prev Crude Build</span>
-          <span className="text-nexus-red font-mono">+3.44M bbl</span>
-        </div>
-        <div className="flex justify-between text-xs">
-          <span className="text-muted">Forecast</span>
-          <span className="text-nexus-green font-mono">-2.10M bbl</span>
+      <div className="mt-4 pt-3 border-t border-border">
+        <div className="flex justify-between text-xs items-center">
+          <span className="text-muted">Latest EIA report:</span>
+          <a
+            href="https://www.eia.gov/petroleum/supply/weekly/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-nexus-blue hover:underline"
+          >
+            eia.gov/petroleum
+          </a>
         </div>
       </div>
     </div>
@@ -257,11 +270,16 @@ function SeasonalHeatmap() {
 
   return (
     <div className="nexus-card p-4 col-span-2">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-medium text-sm text-white">Seasonal Patterns (Avg Monthly %)</h3>
+      <div className="flex items-center justify-between mb-1">
+        <div>
+          <h3 className="font-medium text-sm text-white">
+            Historical Seasonal Averages (2015–2023)
+          </h3>
+          <p className="text-xs text-muted mt-0.5">Not live data</p>
+        </div>
         <BarChart2 size={14} className="text-nexus-purple" />
       </div>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto mt-3">
         <table className="w-full text-xs">
           <thead>
             <tr>
@@ -315,7 +333,7 @@ export default function CommoditiesPage() {
   const { signalFeed } = useNexusStore();
   const [selectedCommodity, setSelectedCommodity] = useState('XAUUSD');
   const [signals, setSignals] = useState<Signal[]>([]);
-  const metals = useCommodityPrices();
+  const { metals, gsRatio, loading: metalsLoading } = useMetals();
   const { wti, natgas } = useOilPrices();
 
   useEffect(() => {
@@ -324,9 +342,14 @@ export default function CommoditiesPage() {
 
   const commoditySignals = [...signals, ...signalFeed.filter((s) => s.market === 'commodities')];
 
-  // Build live commodity list; fall back to 0 while data loads
-  const goldPrice = metals['gold'] ?? 0;
-  const silverPrice = metals['silver'] ?? 0;
+  // Derive gold and silver from the API response
+  const goldMetal = metals.find((m) => m.name === 'Gold');
+  const silverMetal = metals.find((m) => m.name === 'Silver');
+
+  const goldPrice = goldMetal?.price ?? 0;
+  const silverPrice = silverMetal?.price ?? 0;
+  const goldChangePct = goldMetal?.change_pct ?? 0;
+  const silverChangePct = silverMetal?.change_pct ?? 0;
 
   const COMMODITIES: CommodityItem[] = [
     {
@@ -334,7 +357,7 @@ export default function CommoditiesPage() {
       label: 'Gold',
       unit: 'troy oz',
       price: goldPrice,
-      change: 0,   // metals.live doesn't provide daily change; shown as 0 until extended
+      change: goldChangePct,
       icon: '🥇',
     },
     {
@@ -342,7 +365,7 @@ export default function CommoditiesPage() {
       label: 'Silver',
       unit: 'troy oz',
       price: silverPrice,
-      change: 0,
+      change: silverChangePct,
       icon: '🥈',
     },
     {
@@ -363,20 +386,22 @@ export default function CommoditiesPage() {
     },
   ];
 
-  const GOLD_SILVER_RATIO = silverPrice > 0 ? goldPrice / silverPrice : 0;
+  // Use real computed ratio from API; fall back to local computation if not available
+  const GOLD_SILVER_RATIO =
+    gsRatio ?? (silverPrice > 0 ? goldPrice / silverPrice : 0);
 
-  const loadingMetals = goldPrice === 0 && silverPrice === 0;
+  const loadingCards = metalsLoading && goldPrice === 0 && silverPrice === 0;
 
   return (
     <div className="space-y-4">
       {/* Attribution */}
       <div className="flex items-center justify-end px-1 gap-4">
-        <span className="text-xs text-muted">Metals via metals.live · Oil via Yahoo Finance</span>
+        <span className="text-xs text-muted">Metals via /api/commodities/metals · Oil via Yahoo Finance</span>
       </div>
 
       {/* Price cards */}
       <div className="grid grid-cols-4 gap-4">
-        {loadingMetals
+        {loadingCards
           ? Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="nexus-card p-4 h-28 animate-pulse bg-white/5" />
             ))
