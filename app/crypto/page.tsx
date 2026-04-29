@@ -763,16 +763,16 @@ export default function CryptoPage() {
           rel="noopener noreferrer"
           className="hover:text-white transition-colors"
         >
-          Binance API
+          Binance Futures API
         </a>
         {' · '}
         <a
-          href="https://blockchain.info/unconfirmed-transactions"
+          href="https://whale-alert.io"
           target="_blank"
           rel="noopener noreferrer"
           className="hover:text-white transition-colors"
         >
-          blockchain.info
+          Whale Alert
         </a>
         {' · '}
         <a
