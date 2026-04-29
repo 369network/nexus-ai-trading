@@ -138,7 +138,7 @@ const API_SERVICES: ApiServiceConfig[] = [
     fields: [
       { key: 'api_key', label: 'API Key', placeholder: 'Enter NewsAPI Key...' },
     ],
-    testEndpoint: 'https://newsapi.org/v2/top-headlines?country=us&apiKey=demo',
+    // NewsAPI blocks all browser CORS requests — tested by the bot on VPS only
   },
   {
     id: 'glassnode',
@@ -150,7 +150,7 @@ const API_SERVICES: ApiServiceConfig[] = [
     fields: [
       { key: 'api_key', label: 'API Key', placeholder: 'Enter Glassnode API Key...' },
     ],
-    testEndpoint: 'https://api.glassnode.com/v1/metrics/market/price_usd_close?a=BTC',
+    // Glassnode requires auth for every endpoint — tested by the bot on VPS only
   },
 ];
 
