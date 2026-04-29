@@ -249,12 +249,21 @@ function ToggleSwitch({
 function EmergencyStopDialog() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState('');
 
-  const handleStop = () => {
-    if (input === 'STOP') {
-      console.log('EMERGENCY STOP TRIGGERED');
+  const handleStop = async () => {
+    if (input !== 'STOP') return;
+    setStopping(true);
+    setStopError('');
+    try {
+      await api.emergencyStop();
       setOpen(false);
       setInput('');
+    } catch (err) {
+      setStopError(err instanceof Error ? err.message : 'Emergency stop failed');
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -285,6 +294,11 @@ function EmergencyStopDialog() {
               placeholder="STOP"
             />
           </div>
+          {stopError && (
+            <div className="mb-3 text-xs text-nexus-red bg-nexus-red/10 border border-nexus-red/20 rounded px-3 py-2">
+              {stopError}
+            </div>
+          )}
           <div className="flex gap-3">
             <Dialog.Close asChild>
               <button className="flex-1 py-2 px-4 bg-border text-white rounded-lg text-sm hover:bg-border-bright transition-colors">
@@ -293,10 +307,10 @@ function EmergencyStopDialog() {
             </Dialog.Close>
             <button
               onClick={handleStop}
-              disabled={input !== 'STOP'}
+              disabled={input !== 'STOP' || stopping}
               className="flex-1 py-2 px-4 bg-nexus-red text-white font-bold rounded-lg text-sm hover:bg-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              STOP ALL
+              {stopping ? 'Stopping…' : 'STOP ALL'}
             </button>
           </div>
         </Dialog.Content>
