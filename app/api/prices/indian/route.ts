@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 // Indian market indices via Yahoo Finance (server-side, avoids CORS)
 const SYMBOLS: Record<string, string> = {
   '^NSEI':    'NIFTY50',

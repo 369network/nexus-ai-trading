@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 const YAHOO_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
 async function fetchYahoo(symbol: string) {

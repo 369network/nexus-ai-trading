@@ -129,7 +129,7 @@ export const useNexusStore = create<NexusStore>()(
 
       updateTrade: (trade: Trade) => {
         set((state) => {
-          const isOpen = trade.status === 'OPEN';
+          const isOpen = ['OPEN', 'PARTIAL', 'FILLED'].includes(trade.status);
           const activeTrades = isOpen
             ? state.activeTrades.map((t) => (t.id === trade.id ? trade : t))
             : state.activeTrades.filter((t) => t.id !== trade.id);
