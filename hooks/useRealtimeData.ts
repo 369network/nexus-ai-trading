@@ -188,6 +188,7 @@ export function useRealtimeRisk(pollingIntervalMs = 10_000): RiskMetrics {
 
   const fetchMetrics = useCallback(async () => {
     try {
+      // getRiskMetrics now derives data from Supabase portfolio_snapshots — no bot call needed
       const data = await api.getRiskMetrics();
       setMetrics(data);
     } catch {

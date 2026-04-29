@@ -479,17 +479,47 @@ export async function getAgentHistory(
 }
 
 export async function getBrierScores(): Promise<BrierScore[]> {
+  // model_performance stores per-model predictions; derive brier scores from it.
+  // Returns one row per (model, market) aggregated over the last 30 days.
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const { data, error } = await supabase
-    .from('brier_scores')
-    .select('*')
-    .order('period', { ascending: false })
-    .limit(35); // 5 agents × 7 markets
+    .from('model_performance')
+    .select('model, market, direction, confidence, actual_direction, timestamp')
+    .eq('record_type', 'prediction')
+    .gte('timestamp', since)
+    .order('timestamp', { ascending: false })
+    .limit(500);
 
   if (error) {
-    console.error('[Supabase] getBrierScores error:', error);
+    console.error('[Supabase] getBrierScores (model_performance) error:', error);
     return [];
   }
-  return data ?? [];
+  if (!data || data.length === 0) return [];
+
+  // Group by (model, market) and compute mean Brier score
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groups: Record<string, { sum: number; count: number; market: string; agent: any }> = {};
+  for (const row of data) {
+    const key = `${row.model}__${row.market}`;
+    if (!groups[key]) {
+      groups[key] = { sum: 0, count: 0, market: row.market, agent: row.model };
+    }
+    // Brier score component — actual outcome encoded as 1 (correct) or 0 (wrong)
+    const isCorrect = row.actual_direction
+      ? row.direction === row.actual_direction ? 1 : 0
+      : 0.5; // no outcome yet — neutral
+    const conf = typeof row.confidence === 'number' ? row.confidence : 0.5;
+    groups[key].sum += (conf - isCorrect) ** 2;
+    groups[key].count += 1;
+  }
+
+  return Object.values(groups).map((g) => ({
+    agent: g.agent as AgentRole,
+    market: g.market as Market,
+    score: g.count > 0 ? g.sum / g.count : 0.25,
+    trades_evaluated: g.count,
+    period: 'last-30d',
+  }));
 }
 
 export async function getLatestPortfolioSnapshot(): Promise<PortfolioSnapshot | null> {
