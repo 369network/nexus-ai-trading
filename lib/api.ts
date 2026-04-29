@@ -364,23 +364,29 @@ export const api = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function _rowsToDebate(rows: any[]): AgentDebate {
   const first = rows[0];
+  const consensus = _deriveConsensus(rows) as 'LONG' | 'SHORT' | 'NEUTRAL';
+  const consensusScore =
+    rows.reduce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (sum: number, r: any) => sum + (r.confidence ?? 0.5), 0
+    ) / Math.max(rows.length, 1);
+
   return {
     id: first.id,
     symbol: first.symbol ?? '',
-    market: first.market ?? 'crypto',
+    market: (first.market ?? 'crypto') as Market,
     timestamp: first.created_at,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     agents: rows.map((r: any) => ({
+      id: r.id,
       role: r.role,
-      decision: r.signal ?? 'NEUTRAL',
+      decision: (r.signal === 'BUY' ? 'LONG' : r.signal === 'SELL' ? 'SHORT' : 'NEUTRAL') as 'LONG' | 'SHORT' | 'NEUTRAL',
       confidence: r.confidence ?? 0.5,
       reasoning: r.reasoning ?? '',
+      created_at: r.created_at,
     })),
-    consensus: _deriveConsensus(rows),
-    consensus_confidence: rows.reduce(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (sum: number, r: any) => sum + (r.confidence ?? 0.5), 0
-    ) / Math.max(rows.length, 1),
+    final_decision: consensus,
+    consensus_score: consensusScore,
   } as AgentDebate;
 }
 
@@ -389,7 +395,9 @@ function _deriveConsensus(rows: any[]): string {
   const counts: Record<string, number> = {};
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const r of rows) {
-    const s = r.signal ?? 'NEUTRAL';
+    const raw = r.signal ?? 'NEUTRAL';
+    // Normalise BUY/SELL → LONG/SHORT
+    const s = raw === 'BUY' ? 'LONG' : raw === 'SELL' ? 'SHORT' : 'NEUTRAL';
     counts[s] = (counts[s] ?? 0) + 1;
   }
   return Object.entries(counts).sort(([, a], [, b]) => b - a)[0]?.[0] ?? 'NEUTRAL';
