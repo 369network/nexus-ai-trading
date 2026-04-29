@@ -320,21 +320,13 @@ function EmergencyStopDialog() {
 }
 
 function PaperModeToggle() {
-  const { systemStatus, updateSystemStatus } = useNexusStore();
-  const [open, setOpen] = useState(false);
+  const { systemStatus } = useNexusStore();
 
-  const handleToggle = () => {
-    if (systemStatus.paper_mode) {
-      setOpen(true);
-    } else {
-      updateSystemStatus({ paper_mode: true });
-    }
-  };
-
-  const confirmGoLive = () => {
-    updateSystemStatus({ paper_mode: false });
-    setOpen(false);
-  };
+  // Mode is READ-ONLY from the dashboard — it reflects what the VPS bot reports
+  // via the /health endpoint (polled every 30 s). To switch modes you must change
+  // the bot's config on the VPS and restart it.
+  // The toggle is disabled so it cannot mislead the user.
+  // Orientation: checked = paper mode ON (toggle green = paper mode is active).
 
   return (
     <div className={cn(
@@ -357,38 +349,18 @@ function PaperModeToggle() {
                 ? 'All trades are simulated. No real money at risk.'
                 : 'CAUTION: Real money is at risk. Trades execute on live markets.'}
             </div>
+            <div className="text-xs text-muted/60 mt-1">
+              Read from VPS bot · change bot config &amp; restart to switch modes
+            </div>
           </div>
         </div>
-        <ToggleSwitch checked={!systemStatus.paper_mode} onChange={handleToggle} />
+        {/* Disabled — mode is set by VPS bot config, not by the dashboard */}
+        <ToggleSwitch
+          checked={systemStatus.paper_mode}
+          onChange={() => {}}
+          disabled
+        />
       </div>
-
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card border border-nexus-yellow/40 rounded-xl p-6 w-96 z-50">
-            <Dialog.Title className="text-nexus-yellow font-bold text-lg flex items-center gap-2 mb-2">
-              <AlertTriangle size={20} />
-              Switch to Live Trading?
-            </Dialog.Title>
-            <Dialog.Description className="text-sm text-gray-300 mb-4">
-              You are about to switch from paper trading to live trading. Real money will be used for all trades.
-            </Dialog.Description>
-            <div className="flex gap-3">
-              <Dialog.Close asChild>
-                <button className="flex-1 py-2 px-4 bg-border text-white rounded-lg text-sm hover:bg-border-bright transition-colors">
-                  Stay Paper
-                </button>
-              </Dialog.Close>
-              <button
-                onClick={confirmGoLive}
-                className="flex-1 py-2 px-4 bg-nexus-yellow text-black font-bold rounded-lg text-sm hover:bg-yellow-400 transition-colors"
-              >
-                GO LIVE
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
     </div>
   );
 }
