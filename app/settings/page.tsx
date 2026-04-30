@@ -903,7 +903,6 @@ export default function SettingsPage() {
             </button>
           )}
         </div>
-        </div>
         <div className="grid grid-cols-5 gap-4">
           {thresholds.map((t) => (
             <div key={t.key} className="text-center">
