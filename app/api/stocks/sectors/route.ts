@@ -1,8 +1,10 @@
 /**
  * GET /api/stocks/sectors
  * -----------------------
- * Real US sector performance from Yahoo Finance.
+ * Real US sector performance from Yahoo Finance v8/chart per-symbol.
  * Fetches the 11 SPDR sector ETFs (XLK, XLF, XLV, etc.) for live % changes.
+ * Uses per-symbol v8/chart approach (same as /api/prices/indices) which works
+ * from Vercel IPs — the v7/quote batch endpoint was returning 401.
  */
 
 import { NextResponse } from 'next/server';
@@ -23,66 +25,57 @@ const SECTOR_ETFS = [
   { symbol: 'XLU',  name: 'Utilities',          weight: 2.4  },
 ];
 
-interface YahooQuote {
-  symbol: string;
-  regularMarketPrice: number;
-  regularMarketChangePercent: number;
-  regularMarketChange: number;
-  regularMarketPreviousClose: number;
-}
+const YAHOO_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
-interface YahooQuoteResponse {
-  quoteResponse?: {
-    result: YahooQuote[];
-    error: null | string;
-  };
-}
+async function fetchSector(symbol: string) {
+  try {
+    const res = await fetch(
+      `${YAHOO_BASE}/${encodeURIComponent(symbol)}?interval=1d&range=5d`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; NEXUS-ALPHA/1.0)',
+          'Accept': 'application/json',
+        },
+        next: { revalidate: 60 },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+    if (!res.ok) return null;
 
-async function fetchYahooQuotes(symbols: string[]): Promise<YahooQuote[]> {
-  const joined = symbols.join(',');
-  const url =
-    `https://query1.finance.yahoo.com/v7/finance/quote` +
-    `?symbols=${encodeURIComponent(joined)}` +
-    `&fields=regularMarketPrice,regularMarketChangePercent,regularMarketChange,regularMarketPreviousClose`;
+    const data = await res.json();
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; NEXUS-ALPHA/1.0)',
-      Accept: 'application/json',
-    },
-    next: { revalidate: 60 },
-  });
+    const meta = result.meta;
+    const price: number = meta.regularMarketPrice;
+    const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price;
+    const change = price - prevClose;
+    const change_pct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
 
-  if (!res.ok) throw new Error(`Yahoo Finance error ${res.status}`);
-  const json: YahooQuoteResponse = await res.json();
-  return json.quoteResponse?.result ?? [];
+    return {
+      price:      typeof price === 'number' ? price : null,
+      change:     typeof change === 'number' ? change : null,
+      change_pct: typeof change_pct === 'number' ? change_pct : null,
+      prev_close: typeof prevClose === 'number' ? prevClose : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function GET() {
-  try {
-    const symbols = SECTOR_ETFS.map((s) => s.symbol);
-    const quotes = await fetchYahooQuotes(symbols);
+  // Fetch all 11 ETFs in parallel
+  const results = await Promise.all(SECTOR_ETFS.map((etf) => fetchSector(etf.symbol)));
 
-    const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
+  const sectors = SECTOR_ETFS.map((etf, i) => ({
+    symbol:     etf.symbol,
+    name:       etf.name,
+    weight:     etf.weight,
+    price:      results[i]?.price      ?? null,
+    change:     results[i]?.change     ?? null,
+    change_pct: results[i]?.change_pct ?? null,
+    prev_close: results[i]?.prev_close ?? null,
+  }));
 
-    const sectors = SECTOR_ETFS.map((etf) => {
-      const q = quoteMap.get(etf.symbol);
-      return {
-        symbol: etf.symbol,
-        name: etf.name,
-        weight: etf.weight,
-        price: q?.regularMarketPrice ?? null,
-        change: q?.regularMarketChange ?? null,
-        change_pct: q?.regularMarketChangePercent ?? null,
-        prev_close: q?.regularMarketPreviousClose ?? null,
-      };
-    });
-
-    return NextResponse.json({ sectors, timestamp: new Date().toISOString() });
-  } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err), sectors: [] },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json({ sectors, timestamp: new Date().toISOString() });
 }
