@@ -559,7 +559,7 @@ export default function RiskPage() {
         layer: 2,
         name: 'Position Sizing',
         description: 'Kelly criterion & volatility adjustment',
-        status: 'GREEN',
+        status: (positionSizingVal !== null && positionSizingVal > 0.05) || maxConcentration > 10 ? 'YELLOW' : 'GREEN',
         checks: [
           {
             name: 'Kelly fraction max',
