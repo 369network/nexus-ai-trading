@@ -58,7 +58,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const markets: PolymarketMarket[] = (data ?? []).map((row) => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const markets: PolymarketMarket[] = ((data ?? []) as any[]).map((row) => ({
       id:           row.id,
       question:     row.question,
       description:  row.description ?? '',

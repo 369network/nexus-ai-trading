@@ -104,7 +104,8 @@ export async function GET() {
     const rawBody: any = await res.json();
     const markets: unknown[] = Array.isArray(rawBody) ? rawBody : (rawBody.markets ?? []);
 
-    const opportunities = (markets as Parameters<typeof parseMarketOpportunity>[0][])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opportunities = (markets as any[])
       .map(parseMarketOpportunity)
       .filter((o): o is ArbOpportunity => o !== null)
       .sort((a, b) => b.profit_per_dollar - a.profit_per_dollar)
