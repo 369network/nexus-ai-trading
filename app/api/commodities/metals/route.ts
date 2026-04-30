@@ -1,134 +1,84 @@
 /**
  * GET /api/commodities/metals
  * ---------------------------
- * Real precious metals prices WITH 24h % change.
- * Primary: metals.live API for spot prices
- * Change %: Yahoo Finance GC=F / SI=F / PL=F / PA=F futures for daily change
+ * Real precious metals prices with 24h change.
+ * Source: Yahoo Finance v8/chart per-symbol (same pattern as /api/prices/indices)
+ * Symbols: GC=F (Gold), SI=F (Silver), PL=F (Platinum), PA=F (Palladium)
  */
 
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-interface MetalSpot {
-  gold: number;
-  silver: number;
-  platinum: number;
-  palladium: number;
+const YAHOO_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart';
+
+interface MetalData {
+  price: number | null;
+  change: number | null;
+  change_pct: number | null;
+  high: number | null;
+  low: number | null;
 }
 
-interface YahooQuote {
-  symbol: string;
-  regularMarketPrice: number;
-  regularMarketChangePercent: number;
-  regularMarketChange: number;
-  regularMarketDayHigh: number;
-  regularMarketDayLow: number;
-  regularMarketVolume: number;
-}
-
-async function fetchMetalsLive(): Promise<MetalSpot | null> {
-  try {
-    const res = await fetch('https://api.metals.live/v1/spot/gold,silver,platinum,palladium', {
-      next: { revalidate: 60 },
-    });
-    if (!res.ok) return null;
-    const data: Array<Record<string, number>> = await res.json();
-    const merged: Record<string, number> = Object.assign({}, ...data);
-    return {
-      gold: merged.gold ?? 0,
-      silver: merged.silver ?? 0,
-      platinum: merged.platinum ?? 0,
-      palladium: merged.palladium ?? 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchYahooMetals(): Promise<YahooQuote[]> {
-  // GC=F Gold Futures, SI=F Silver Futures, PL=F Platinum, PA=F Palladium
-  const symbols = ['GC=F', 'SI=F', 'PL=F', 'PA=F'];
+async function fetchYahooMetal(symbol: string): Promise<MetalData> {
+  const empty: MetalData = { price: null, change: null, change_pct: null, high: null, low: null };
   try {
     const res = await fetch(
-      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(','))}&fields=regularMarketPrice,regularMarketChangePercent,regularMarketChange,regularMarketDayHigh,regularMarketDayLow,regularMarketVolume`,
+      `${YAHOO_BASE}/${encodeURIComponent(symbol)}?interval=1d&range=5d`,
       {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; NEXUS-ALPHA/1.0)',
-          Accept: 'application/json',
+          'Accept': 'application/json',
         },
         next: { revalidate: 60 },
-      },
+        signal: AbortSignal.timeout(10000),
+      }
     );
-    if (!res.ok) return [];
-    const json = await res.json();
-    return json.quoteResponse?.result ?? [];
+    if (!res.ok) return empty;
+
+    const data = await res.json();
+    const result = data.chart?.result?.[0];
+    if (!result) return empty;
+
+    const meta = result.meta;
+    const price: number = meta.regularMarketPrice;
+    const prevClose: number = meta.chartPreviousClose ?? meta.previousClose ?? price;
+    const change = price - prevClose;
+    const change_pct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+    const high: number | null = meta.regularMarketDayHigh ?? null;
+    const low: number | null = meta.regularMarketDayLow ?? null;
+
+    return {
+      price:      typeof price === 'number' ? price : null,
+      change:     typeof change === 'number' ? change : null,
+      change_pct: typeof change_pct === 'number' ? change_pct : null,
+      high,
+      low,
+    };
   } catch {
-    return [];
+    return empty;
   }
 }
 
 export async function GET() {
-  const [spotData, yahooQuotes] = await Promise.all([
-    fetchMetalsLive(),
-    fetchYahooMetals(),
+  const [gold, silver, platinum, palladium] = await Promise.all([
+    fetchYahooMetal('GC=F'),
+    fetchYahooMetal('SI=F'),
+    fetchYahooMetal('PL=F'),
+    fetchYahooMetal('PA=F'),
   ]);
 
-  const yahooMap = new Map(yahooQuotes.map((q) => [q.symbol, q]));
-
-  // Merge: use metals.live for spot price (more accurate), Yahoo for % change
-  const gc = yahooMap.get('GC=F');
-  const si = yahooMap.get('SI=F');
-  const pl = yahooMap.get('PL=F');
-  const pa = yahooMap.get('PA=F');
-
   const metals = [
-    {
-      name: 'Gold',
-      symbol: 'XAU',
-      price: spotData?.gold ?? gc?.regularMarketPrice ?? null,
-      change_pct: gc?.regularMarketChangePercent ?? null,
-      change: gc?.regularMarketChange ?? null,
-      high: gc?.regularMarketDayHigh ?? null,
-      low: gc?.regularMarketDayLow ?? null,
-      unit: 'oz',
-    },
-    {
-      name: 'Silver',
-      symbol: 'XAG',
-      price: spotData?.silver ?? si?.regularMarketPrice ?? null,
-      change_pct: si?.regularMarketChangePercent ?? null,
-      change: si?.regularMarketChange ?? null,
-      high: si?.regularMarketDayHigh ?? null,
-      low: si?.regularMarketDayLow ?? null,
-      unit: 'oz',
-    },
-    {
-      name: 'Platinum',
-      symbol: 'XPT',
-      price: spotData?.platinum ?? pl?.regularMarketPrice ?? null,
-      change_pct: pl?.regularMarketChangePercent ?? null,
-      change: pl?.regularMarketChange ?? null,
-      high: pl?.regularMarketDayHigh ?? null,
-      low: pl?.regularMarketDayLow ?? null,
-      unit: 'oz',
-    },
-    {
-      name: 'Palladium',
-      symbol: 'XPD',
-      price: spotData?.palladium ?? pa?.regularMarketPrice ?? null,
-      change_pct: pa?.regularMarketChangePercent ?? null,
-      change: pa?.regularMarketChange ?? null,
-      high: pa?.regularMarketDayHigh ?? null,
-      low: pa?.regularMarketDayLow ?? null,
-      unit: 'oz',
-    },
+    { name: 'Gold',      symbol: 'XAU', ...gold,      unit: 'oz' },
+    { name: 'Silver',    symbol: 'XAG', ...silver,    unit: 'oz' },
+    { name: 'Platinum',  symbol: 'XPT', ...platinum,  unit: 'oz' },
+    { name: 'Palladium', symbol: 'XPD', ...palladium, unit: 'oz' },
   ];
 
   // Gold/Silver ratio
   const gsRatio =
-    metals[0].price && metals[1].price
-      ? Math.round((metals[0].price / metals[1].price) * 100) / 100
+    gold.price && silver.price
+      ? Math.round((gold.price / silver.price) * 100) / 100
       : null;
 
   return NextResponse.json({
