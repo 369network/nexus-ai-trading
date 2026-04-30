@@ -7,6 +7,11 @@
  *  3. Upsert discovered markets + arb opportunities to Supabase
  *
  * Returns summary of markets found, arb found, rows written.
+ *
+ * NOTE: Gamma API returns `outcomePrices` and `clobTokenIds` as
+ *       JSON-encoded strings (e.g. '["0.53","0.47"]'), not real arrays.
+ *       `parseJsonField()` normalises them before use so we never send
+ *       NaN / null into NOT-NULL numeric columns.
  */
 
 import { NextResponse } from 'next/server';
@@ -16,6 +21,25 @@ export const dynamic = 'force-dynamic';
 
 const GAMMA = 'https://gamma-api.polymarket.com';
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Gamma API may return array fields as JSON-encoded strings — normalise them. */
+function parseJsonField<T>(v: T | string | undefined | null, fallback: T): T {
+  if (v === null || v === undefined) return fallback;
+  if (Array.isArray(v)) return v as unknown as T;
+  if (typeof v === 'string') {
+    try { return JSON.parse(v) as T; } catch { return fallback; }
+  }
+  return v as T;
+}
+
+/** Safe parseFloat that falls back to `def` on NaN / null / undefined. */
+function safeParse(s: string | undefined | null, def: number): number {
+  if (s == null) return def;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : def;
+}
+
 // ── Fetch markets from Gamma ──────────────────────────────────────────────────
 
 interface GammaMarket {
@@ -24,8 +48,10 @@ interface GammaMarket {
   description?: string;
   category?: string;
   marketSlug?: string;
-  clobTokenIds?: string[];
-  outcomePrices?: string[];
+  /** May arrive as a JSON-encoded string from Gamma API */
+  clobTokenIds?: string[] | string;
+  /** May arrive as a JSON-encoded string from Gamma API */
+  outcomePrices?: string[] | string;
   volume24hr?: number;
   volume?: number;
   openInterest?: number;
@@ -35,7 +61,13 @@ interface GammaMarket {
   endDate?: string;
 }
 
-async function fetchGammaMarkets(): Promise<GammaMarket[]> {
+/** Normalised market — arrays are always real arrays after fetch. */
+interface NormalMarket extends Omit<GammaMarket, 'outcomePrices' | 'clobTokenIds'> {
+  outcomePrices: string[];
+  clobTokenIds: string[];
+}
+
+async function fetchGammaMarkets(): Promise<NormalMarket[]> {
   const params = new URLSearchParams({
     active: 'true',
     closed: 'false',
@@ -48,34 +80,38 @@ async function fetchGammaMarkets(): Promise<GammaMarket[]> {
   });
   if (!res.ok) return [];
   const json = await res.json();
-  return Array.isArray(json) ? json : (json.markets ?? []);
+  const raw: GammaMarket[] = Array.isArray(json) ? json : (json.markets ?? []);
+
+  return raw.map((m) => ({
+    ...m,
+    // Gamma API may return these as JSON-encoded strings — parse them
+    outcomePrices: parseJsonField<string[]>(m.outcomePrices, ['0.5', '0.5']),
+    clobTokenIds:  parseJsonField<string[]>(m.clobTokenIds,  []),
+  }));
 }
 
 // ── Upsert polymarket_markets ─────────────────────────────────────────────────
 
-async function upsertMarkets(supabase: ReturnType<typeof createClient>, markets: GammaMarket[]) {
-  const rows = markets.map((m) => {
-    const prices: string[] = m.outcomePrices ?? ['0.5', '0.5'];
-    return {
-      id:            m.conditionId,
-      question:      m.question,
-      description:   m.description ?? null,
-      category:      m.category ?? null,
-      market_slug:   m.marketSlug ?? null,
-      yes_token_id:  m.clobTokenIds?.[0] ?? '',
-      no_token_id:   m.clobTokenIds?.[1] ?? '',
-      yes_price:     parseFloat(prices[0] ?? '0.5'),
-      no_price:      parseFloat(prices[1] ?? '0.5'),
-      volume_24h:    m.volume24hr ?? 0,
-      total_volume:  m.volume ?? 0,
-      open_interest: m.openInterest ?? null,
-      active:        m.active ?? true,
-      closed:        m.closed ?? false,
-      resolved:      m.resolved ?? false,
-      end_date:      m.endDate ?? null,
-      updated_at:    new Date().toISOString(),
-    };
-  });
+async function upsertMarkets(supabase: ReturnType<typeof createClient>, markets: NormalMarket[]) {
+  const rows = markets.map((m) => ({
+    id:            m.conditionId,
+    question:      m.question,
+    description:   m.description ?? null,
+    category:      m.category ?? null,
+    market_slug:   m.marketSlug ?? null,
+    yes_token_id:  m.clobTokenIds[0] ?? '',
+    no_token_id:   m.clobTokenIds[1] ?? '',
+    yes_price:     safeParse(m.outcomePrices[0], 0.5),
+    no_price:      safeParse(m.outcomePrices[1], 0.5),
+    volume_24h:    m.volume24hr ?? 0,
+    total_volume:  m.volume ?? 0,
+    open_interest: m.openInterest ?? null,
+    active:        m.active ?? true,
+    closed:        m.closed ?? false,
+    resolved:      m.resolved ?? false,
+    end_date:      m.endDate ?? null,
+    updated_at:    new Date().toISOString(),
+  }));
 
   if (!rows.length) return 0;
 
@@ -92,12 +128,11 @@ async function upsertMarkets(supabase: ReturnType<typeof createClient>, markets:
 
 // ── Detect arb opportunities ──────────────────────────────────────────────────
 
-async function detectAndSaveArb(supabase: ReturnType<typeof createClient>, markets: GammaMarket[]) {
+async function detectAndSaveArb(supabase: ReturnType<typeof createClient>, markets: NormalMarket[]) {
   const arbs = markets
     .map((m) => {
-      const prices = m.outcomePrices ?? ['0.5', '0.5'];
-      const yes = parseFloat(prices[0] ?? '0.5');
-      const no  = parseFloat(prices[1] ?? '0.5');
+      const yes = safeParse(m.outcomePrices[0], 0.5);
+      const no  = safeParse(m.outcomePrices[1], 0.5);
       const combined = yes + no;
       const profit = 1 - combined - 0.02; // minus fees
       return { m, yes, no, combined, profit };
