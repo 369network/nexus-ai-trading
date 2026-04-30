@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useNexusStore } from '@/lib/store';
 import {
   Target,
   TrendingUp,
@@ -839,8 +840,9 @@ function usePolymarketData<T>(
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function PolymarketPage() {
-  // Paper mode: derive from global store if available, default true for safety
-  const paperMode = true; // default to paper — override with store.systemStatus.paper_mode if wired
+  // Paper mode: read from global store; default true for safety until first heartbeat
+  const { systemStatus } = useNexusStore();
+  const paperMode = systemStatus.paper_mode;
 
   // Stats (60s refresh)
   const statsState = usePolymarketData<Record<string, unknown>>(

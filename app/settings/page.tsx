@@ -567,6 +567,9 @@ export default function SettingsPage() {
   const [weights, setWeights] = useState(LLM_WEIGHTS);
   const [limits, setLimits] = useState(RISK_LIMITS);
   const [thresholds, setThresholds] = useState(CIRCUIT_THRESHOLDS);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSaveMsg, setSettingsSaveMsg] = useState('');
 
   // API Keys state (loaded from localStorage)
   const [savedKeys, setSavedKeys] = useState<SavedApiKeys>({});
@@ -575,7 +578,7 @@ export default function SettingsPage() {
   );
   const [saveNotice, setSaveNotice] = useState('');
 
-  // Load feature flags from Supabase on mount
+  // Load feature flags AND tunable settings from Supabase on mount
   useEffect(() => {
     api.getFeatureFlags().then((flags) => {
       if (Object.keys(flags).length > 0) {
@@ -587,6 +590,32 @@ export default function SettingsPage() {
         );
       }
     }).catch(() => {/* use defaults */});
+
+    // Load tunable settings (weights, limits, thresholds) from DB
+    fetch('/api/settings')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data) return;
+        if (Array.isArray(data.weights) && data.weights.length > 0) {
+          setWeights((prev) => prev.map((w) => {
+            const saved = (data.weights as typeof LLM_WEIGHTS).find((s) => s.agent === w.agent);
+            return saved ? { ...w, weight: saved.weight } : w;
+          }));
+        }
+        if (Array.isArray(data.limits) && data.limits.length > 0) {
+          setLimits((prev) => prev.map((l) => {
+            const saved = (data.limits as typeof RISK_LIMITS).find((s) => s.key === l.key);
+            return saved ? { ...l, value: saved.value } : l;
+          }));
+        }
+        if (Array.isArray(data.thresholds) && data.thresholds.length > 0) {
+          setThresholds((prev) => prev.map((t) => {
+            const saved = (data.thresholds as typeof CIRCUIT_THRESHOLDS).find((s) => s.key === t.key);
+            return saved ? { ...t, value: saved.value } : t;
+          }));
+        }
+      })
+      .catch(() => {/* keep defaults */});
   }, []);
 
   // Load keys from localStorage on mount
@@ -685,17 +714,44 @@ export default function SettingsPage() {
     }));
   };
   const updateWeight = (agent: string, weight: number) => {
+    setSettingsDirty(true);
     setWeights((prev) => prev.map((w) => w.agent === agent ? { ...w, weight } : w));
   };
   const resetWeightsToOptimal = () => {
+    setSettingsDirty(true);
     setWeights((prev) => prev.map((w) => ({ ...w, weight: w.optimal })));
   };
   const updateLimit = (key: string, value: number) => {
+    setSettingsDirty(true);
     setLimits((prev) => prev.map((l) => l.key === key ? { ...l, value } : l));
   };
   const updateThreshold = (key: string, value: number) => {
+    setSettingsDirty(true);
     setThresholds((prev) => prev.map((t) => t.key === key ? { ...t, value } : t));
   };
+
+  const saveSettings = useCallback(async () => {
+    setSettingsSaving(true);
+    setSettingsSaveMsg('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weights, limits, thresholds }),
+      });
+      if (res.ok) {
+        setSettingsDirty(false);
+        setSettingsSaveMsg('Saved to database ✓');
+        setTimeout(() => setSettingsSaveMsg(''), 3000);
+      } else {
+        setSettingsSaveMsg('Save failed — check Supabase service key');
+      }
+    } catch {
+      setSettingsSaveMsg('Network error — could not save');
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [weights, limits, thresholds]);
 
   const flagsByCategory = featureFlags.reduce((acc, f) => {
     if (!acc[f.category]) acc[f.category] = [];
@@ -741,6 +797,28 @@ export default function SettingsPage() {
 
         {/* Right column: LLM Weights + Risk Limits */}
         <div className="space-y-4">
+          {/* Save bar — shown when settings are modified */}
+          {(settingsDirty || settingsSaveMsg) && (
+            <div className={cn(
+              'flex items-center justify-between gap-3 rounded-lg px-4 py-2.5 text-sm border',
+              settingsSaveMsg.includes('✓')
+                ? 'bg-nexus-green/5 border-nexus-green/30 text-nexus-green'
+                : 'bg-nexus-yellow/5 border-nexus-yellow/30 text-nexus-yellow'
+            )}>
+              <span>{settingsSaveMsg || 'Unsaved changes'}</span>
+              {settingsDirty && (
+                <button
+                  onClick={saveSettings}
+                  disabled={settingsSaving}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-nexus-blue text-white text-xs font-medium hover:bg-nexus-blue/80 disabled:opacity-50 transition-colors"
+                >
+                  {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                  {settingsSaving ? 'Saving…' : 'Save to DB'}
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="nexus-card p-5">
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-2">
@@ -809,9 +887,22 @@ export default function SettingsPage() {
 
       {/* Circuit Breaker Thresholds */}
       <div className="nexus-card p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <AlertTriangle size={16} className="text-nexus-red" />
-          <h2 className="font-semibold text-white">Circuit Breaker Thresholds</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-nexus-red" />
+            <h2 className="font-semibold text-white">Circuit Breaker Thresholds</h2>
+          </div>
+          {settingsDirty && (
+            <button
+              onClick={saveSettings}
+              disabled={settingsSaving}
+              className="flex items-center gap-1.5 px-3 py-1 rounded bg-nexus-blue text-white text-xs font-medium hover:bg-nexus-blue/80 disabled:opacity-50 transition-colors"
+            >
+              {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              Save
+            </button>
+          )}
+        </div>
         </div>
         <div className="grid grid-cols-5 gap-4">
           {thresholds.map((t) => (

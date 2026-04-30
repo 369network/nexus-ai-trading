@@ -30,6 +30,7 @@ interface WatchlistItem {
   label: string;
   market: Market;
   binanceSymbol?: string;
+  yahooSymbol?: string; // for real RSI/MACD via /api/scanner/indicators
 }
 
 interface ScannerRow {
@@ -57,14 +58,14 @@ const WATCHLIST: WatchlistItem[] = [
   { symbol: 'BNBUSDT',  label: 'BNB/USDT', market: 'crypto',      binanceSymbol: 'BNBUSDT' },
   { symbol: 'XRPUSDT',  label: 'XRP/USDT', market: 'crypto',      binanceSymbol: 'XRPUSDT' },
   { symbol: 'ADAUSDT',  label: 'ADA/USDT', market: 'crypto',      binanceSymbol: 'ADAUSDT' },
-  { symbol: 'EURUSD',   label: 'EUR/USD',  market: 'forex' },
-  { symbol: 'GBPUSD',   label: 'GBP/USD',  market: 'forex' },
-  { symbol: 'USDJPY',   label: 'USD/JPY',  market: 'forex' },
-  { symbol: 'AUDUSD',   label: 'AUD/USD',  market: 'forex' },
-  { symbol: 'XAUUSD',   label: 'Gold',     market: 'commodities' },
-  { symbol: 'XAGUSD',   label: 'Silver',   market: 'commodities' },
-  { symbol: 'SPX',      label: 'S&P 500',  market: 'us_stocks' },
-  { symbol: 'NDX',      label: 'Nasdaq 100', market: 'us_stocks' },
+  { symbol: 'EURUSD',   label: 'EUR/USD',    market: 'forex',        yahooSymbol: 'EURUSD=X' },
+  { symbol: 'GBPUSD',   label: 'GBP/USD',    market: 'forex',        yahooSymbol: 'GBPUSD=X' },
+  { symbol: 'USDJPY',   label: 'USD/JPY',    market: 'forex',        yahooSymbol: 'USDJPY=X' },
+  { symbol: 'AUDUSD',   label: 'AUD/USD',    market: 'forex',        yahooSymbol: 'AUDUSD=X' },
+  { symbol: 'XAUUSD',   label: 'Gold',       market: 'commodities',  yahooSymbol: 'GC=F' },
+  { symbol: 'XAGUSD',   label: 'Silver',     market: 'commodities',  yahooSymbol: 'SI=F' },
+  { symbol: 'SPX',      label: 'S&P 500',    market: 'us_stocks',    yahooSymbol: '^GSPC' },
+  { symbol: 'NDX',      label: 'Nasdaq 100', market: 'us_stocks',    yahooSymbol: '^NDX' },
 ];
 
 const MARKET_LABELS: Record<MarketFilter, string> = {
@@ -260,6 +261,26 @@ async function fetchIndexData(symbol: string): Promise<{ price: number; change: 
   return { price: close, change };
 }
 
+// Fetch real RSI/MACD/trend from our server-side indicator route (Yahoo Finance data)
+interface YahooIndicators { rsi: number; macdBull: boolean; trendUp: boolean }
+const _indicatorCache: Map<string, { data: YahooIndicators; ts: number }> = new Map();
+
+async function fetchYahooIndicators(yahooSymbol: string): Promise<YahooIndicators | null> {
+  const cached = _indicatorCache.get(yahooSymbol);
+  if (cached && Date.now() - cached.ts < 3_600_000) return cached.data; // 1h cache client-side too
+  try {
+    const res = await fetch(`/api/scanner/indicators?symbols=${encodeURIComponent(yahooSymbol)}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const d = json?.data?.[yahooSymbol];
+    if (!d) return null;
+    _indicatorCache.set(yahooSymbol, { data: d, ts: Date.now() });
+    return d;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Signal badge helpers ─────────────────────────────────────────────────────
 
 function signalBadgeClass(signal: SignalType): string {
@@ -388,11 +409,14 @@ export default function ScannerPage() {
         }
 
         if (item.market === 'forex') {
-          const d = await fetchForexData(item.symbol);
-          // Forex: RSI/MACD not available from simple price — use heuristic defaults
-          const rsi  = 50; // neutral default; no candle history from Frankfurter
-          const macdBull = d.change > 0;
-          const trendUp  = d.change > 0;
+          // Fetch price + real RSI/MACD from Yahoo Finance in parallel
+          const [d, ind] = await Promise.all([
+            fetchForexData(item.symbol),
+            item.yahooSymbol ? fetchYahooIndicators(item.yahooSymbol) : Promise.resolve(null),
+          ]);
+          const rsi      = ind?.rsi      ?? 50;
+          const macdBull = ind?.macdBull ?? (d.change > 0);
+          const trendUp  = ind?.trendUp  ?? (d.change > 0);
           const { signal, strength } = computeSignal(rsi, macdBull, trendUp);
           return {
             price:      d.price,
@@ -409,10 +433,13 @@ export default function ScannerPage() {
         }
 
         if (item.market === 'commodities') {
-          const d = await fetchCommodityData(item.symbol);
-          const rsi  = 50;
-          const macdBull = d.change > 0;
-          const trendUp  = d.change > 0;
+          const [d, ind] = await Promise.all([
+            fetchCommodityData(item.symbol),
+            item.yahooSymbol ? fetchYahooIndicators(item.yahooSymbol) : Promise.resolve(null),
+          ]);
+          const rsi      = ind?.rsi      ?? 50;
+          const macdBull = ind?.macdBull ?? (d.change > 0);
+          const trendUp  = ind?.trendUp  ?? (d.change > 0);
           const { signal, strength } = computeSignal(rsi, macdBull, trendUp);
           return {
             price:      d.price,
@@ -429,10 +456,13 @@ export default function ScannerPage() {
         }
 
         if (item.market === 'us_stocks') {
-          const d = await fetchIndexData(item.symbol);
-          const rsi  = 50;
-          const macdBull = d.change > 0;
-          const trendUp  = d.change > 0;
+          const [d, ind] = await Promise.all([
+            fetchIndexData(item.symbol),
+            item.yahooSymbol ? fetchYahooIndicators(item.yahooSymbol) : Promise.resolve(null),
+          ]);
+          const rsi      = ind?.rsi      ?? 50;
+          const macdBull = ind?.macdBull ?? (d.change > 0);
+          const trendUp  = ind?.trendUp  ?? (d.change > 0);
           const { signal, strength } = computeSignal(rsi, macdBull, trendUp);
           return {
             price:      d.price,

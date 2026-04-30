@@ -32,20 +32,46 @@ function useVix(){
   return vix;
 }
 
-// ─── Deterministic correlation helper ──────────────────────────
+// ─── Real correlation hook (Yahoo Finance 30-day daily returns) ──────────────
 
-function getCorrelation(a: string, b: string): number {
-  const cryptos = new Set(['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','DOT','LINK']);
+interface CorrelationResult {
+  symbols: string[];
+  matrix: number[][];
+  loading: boolean;
+}
+
+function useCorrelations(symbols: string[]): CorrelationResult {
+  const [result, setResult] = useState<CorrelationResult>({ symbols: [], matrix: [], loading: true });
+  const key = symbols.slice().sort().join(',');
+
+  useEffect(() => {
+    if (symbols.length < 2) {
+      setResult({ symbols, matrix: [], loading: false });
+      return;
+    }
+    setResult((prev) => ({ ...prev, loading: true }));
+    const controller = new AbortController();
+    fetch(`/api/risk/correlations?symbols=${encodeURIComponent(key)}`, { signal: controller.signal })
+      .then((r) => r.ok ? r.json() : null)
+      .then((json) => {
+        if (json?.matrix) setResult({ symbols: json.symbols, matrix: json.matrix, loading: false });
+        else setResult({ symbols, matrix: [], loading: false });
+      })
+      .catch(() => setResult({ symbols, matrix: [], loading: false }));
+    return () => controller.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  return result;
+}
+
+// Fallback when real correlation unavailable (crypto historical averages)
+function getCorrelationFallback(a: string, b: string): number {
+  if (a === b) return 1.0;
+  const cryptos = new Set(['BTC','ETH','SOL','BNB','XRP','DOGE']);
   const isCryptoA = cryptos.has(a.split('/')[0]);
   const isCryptoB = cryptos.has(b.split('/')[0]);
-  if (a === b) return 1.0;
-  if (isCryptoA && isCryptoB) {
-    const pairSet = new Set([a.split('/')[0], b.split('/')[0]]);
-    if (pairSet.has('BTC') && pairSet.has('ETH')) return 0.85;
-    if (pairSet.has('BTC') && pairSet.has('SOL')) return 0.78;
-    if (pairSet.has('ETH') && pairSet.has('SOL')) return 0.82;
-    return 0.70;
-  }
+  if (isCryptoA && isCryptoB) return 0.72;
   if (isCryptoA !== isCryptoB) return 0.15;
   return 0.35;
 }
@@ -164,18 +190,27 @@ function CircuitBreakerCard({ cb }: { cb: CircuitBreaker }) {
 function CorrelationMatrix({ tradeSymbols }: { tradeSymbols: string[] }) {
   const ref = useRef<SVGSVGElement>(null);
 
-  // Use actual trade symbols if available, otherwise fall back to default set
+  // Use actual trade symbols (short names) if available; else show default set
   const symbols = tradeSymbols.length >= 2
     ? tradeSymbols.slice(0, 8)
-    : ['BTC', 'ETH', 'SOL', 'EURUSD', 'GOLD', 'OIL', 'NIFTY', 'SPX'];
+    : ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE'];
+
+  // Build Yahoo-compatible symbols for the API (crypto → "BTC-USD")
+  const apiSymbols = symbols.map((s) =>
+    ['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX'].includes(s) ? `${s}-USD` : s
+  );
+
+  const corrData = useCorrelations(apiSymbols);
+
+  // Resolve matrix: use real data if available, fallback if loading/missing
+  const matrix: number[][] = useMemo(() => {
+    if (corrData.matrix.length === symbols.length) return corrData.matrix;
+    // Fallback to historical-average estimates while real data loads
+    return symbols.map((a) => symbols.map((b) => getCorrelationFallback(a, b)));
+  }, [corrData.matrix, symbols]);
 
   useEffect(() => {
     if (!ref.current) return;
-
-    // Build deterministic correlation matrix using getCorrelation
-    const correlations: number[][] = symbols.map((a) =>
-      symbols.map((b) => getCorrelation(a, b))
-    );
 
     const svg = d3.select(ref.current);
     svg.selectAll('*').remove();
@@ -197,7 +232,7 @@ function CorrelationMatrix({ tradeSymbols }: { tradeSymbols: string[] }) {
 
     symbols.forEach((_, i) => {
       symbols.forEach((_, j) => {
-        const val = correlations[i][j];
+        const val = matrix[i]?.[j] ?? 0;
         g.append('rect')
           .attr('x', j * cellSize).attr('y', i * cellSize)
           .attr('width', cellSize - 2).attr('height', cellSize - 2)
@@ -223,13 +258,20 @@ function CorrelationMatrix({ tradeSymbols }: { tradeSymbols: string[] }) {
         .attr('text-anchor', 'middle')
         .attr('font-size', '10px').attr('fill', '#9ca3af').text(sym);
     });
-  // Re-render when symbols change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbols.join(',')]);
+  }, [symbols.join(','), matrix]);
 
   return (
     <div className="nexus-card p-4">
-      <h3 className="font-medium text-sm text-white mb-3">Correlation Matrix</h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-medium text-sm text-white">Correlation Matrix</h3>
+        {corrData.loading && (
+          <span className="text-xs text-muted animate-pulse">Loading real data…</span>
+        )}
+        {!corrData.loading && corrData.matrix.length > 0 && (
+          <span className="text-xs text-nexus-green">30-day daily returns</span>
+        )}
+      </div>
       <svg ref={ref} className="w-full" />
     </div>
   );
@@ -387,18 +429,38 @@ export default function RiskPage() {
     return decisions.reduce((s, d) => s + (d.confidence ?? 0), 0) / decisions.length;
   }, [agentStates]);
 
-  // Average pairwise correlation across real open-trade symbols
+  // Real correlations from Yahoo Finance for open-trade symbols
+  const apiSymbolsForCorr = useMemo(() =>
+    tradeSymbols.map((s) =>
+      ['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX'].includes(s) ? `${s}-USD` : s
+    ),
+  [tradeSymbols]);
+  const corrResult = useCorrelations(apiSymbolsForCorr);
+
+  // Average pairwise correlation: use real matrix when available, fallback otherwise
   const avgCorrelation = useMemo(() => {
     if (tradeSymbols.length < 2) return 0;
+    const mat = corrResult.matrix;
+    if (mat.length === tradeSymbols.length) {
+      let sum = 0, count = 0;
+      for (let i = 0; i < tradeSymbols.length; i++) {
+        for (let j = i + 1; j < tradeSymbols.length; j++) {
+          sum += mat[i]?.[j] ?? 0;
+          count++;
+        }
+      }
+      return count > 0 ? sum / count : 0;
+    }
+    // Fallback while loading
     let sum = 0, count = 0;
     for (let i = 0; i < tradeSymbols.length; i++) {
       for (let j = i + 1; j < tradeSymbols.length; j++) {
-        sum += getCorrelation(tradeSymbols[i], tradeSymbols[j]);
+        sum += getCorrelationFallback(tradeSymbols[i], tradeSymbols[j]);
         count++;
       }
     }
     return count > 0 ? sum / count : 0;
-  }, [tradeSymbols]);
+  }, [tradeSymbols, corrResult.matrix]);
 
   // ── Circuit Breakers (real values) ───────────────────────
   const circuitBreakers: CircuitBreaker[] = useMemo(() => [
@@ -451,36 +513,45 @@ export default function RiskPage() {
     return 'text-muted';
   }, [vixData?.regime]);
 
-  // ── Risk Layers (partially live) ─────────────────────────
+  // ── Risk Layers (live values) ─────────────────────────────
   const riskLayers: RiskLayer[] = useMemo(() => {
     const exposurePct = portfolioState.exposurePct ?? 0;
+    const agentCount = Object.values(agentStates).filter(Boolean).length;
+    const confidenceOk = signalScore === null || signalScore >= 0.65;
+    const agentDiversityOk = agentCount >= 3; // need 3+ agents active
+    const layer1Status: 'GREEN' | 'YELLOW' | 'RED' =
+      (!confidenceOk) ? 'RED' : (!agentDiversityOk && agentCount > 0) ? 'YELLOW' : 'GREEN';
+    // Trades with stop-loss set (real check from trade records)
+    const openTrades = activeTrades.filter((t) => t.status === 'OPEN');
+    const withStopLoss = openTrades.filter((t) => t.stop_loss != null && t.stop_loss > 0).length;
+    const stopCoverageOk = openTrades.length === 0 || withStopLoss === openTrades.length;
     return [
       {
         layer: 1,
         name: 'Signal Validation',
         description: 'Pre-trade signal quality checks',
-        status: 'GREEN',
+        status: layer1Status,
         checks: [
           {
             name: 'Confidence threshold',
-            passed: signalScore === null || signalScore >= 0.65,
+            passed: confidenceOk,
             current_value: signalScore !== null ? Number(signalScore.toFixed(2)) : 'N/A',
             threshold: 0.65,
             message: signalScore === null ? 'Awaiting agent data' : signalScore >= 0.65 ? 'OK' : 'Low confidence',
           },
           {
-            name: 'Strength minimum',
-            passed: true,
-            current_value: activeTrades.length,
-            threshold: 60,
-            message: 'OK',
+            name: 'Active agents',
+            passed: agentCount >= 3 || agentCount === 0,
+            current_value: agentCount,
+            threshold: 3,
+            message: agentCount >= 3 ? `${agentCount} agents voting` : agentCount === 0 ? 'Awaiting agents' : `Only ${agentCount} active`,
           },
           {
             name: 'Risk/Reward min',
             passed: true,
             current_value: firstOpenTrade ? 'N/A' : 'N/A',
             threshold: 1.5,
-            message: 'N/A',
+            message: 'N/A — tracked by risk manager',
           },
         ],
       },
@@ -555,7 +626,13 @@ export default function RiskPage() {
             threshold: -15.0,
             message: drawdownPct < 15 ? 'OK' : 'Warning',
           },
-          { name: 'Trailing stop active', passed: true, current_value: 1, threshold: 0, message: 'Active' },
+          {
+            name: 'Stop-loss coverage',
+            passed: stopCoverageOk,
+            current_value: `${withStopLoss}/${openTrades.length}`,
+            threshold: openTrades.length,
+            message: openTrades.length === 0 ? 'No open trades' : stopCoverageOk ? 'All positions protected' : `${openTrades.length - withStopLoss} unprotected`,
+          },
         ],
       },
       {
@@ -571,7 +648,13 @@ export default function RiskPage() {
             threshold: 35.0,
             message: vixData ? `${vixData.regime} regime` : 'Loading',
           },
-          { name: 'Liquidity check', passed: true, current_value: 1, threshold: 1, message: 'Adequate' },
+          {
+            name: 'Position count',
+            passed: openTrades.length <= 20,
+            current_value: openTrades.length,
+            threshold: 20,
+            message: openTrades.length <= 20 ? 'Within limit' : 'Too many positions',
+          },
           {
             name: 'Correlation regime',
             passed: avgCorrelation <= 0.85,
@@ -582,7 +665,7 @@ export default function RiskPage() {
         ],
       },
     ];
-  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration, activeTrades.length, firstOpenTrade, positionSizingVal, signalScore, vixData, avgCorrelation]);
+  }, [portfolioState.exposurePct, drawdownPct, dailyLossPct, maxConcentration, activeTrades, firstOpenTrade, positionSizingVal, signalScore, vixData, avgCorrelation, agentStates]);
 
   // ── Portfolio Exposure (real trades) ─────────────────────
   const marketExposure = useMemo(() => {
