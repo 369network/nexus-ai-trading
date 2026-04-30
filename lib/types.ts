@@ -460,6 +460,86 @@ export interface MarketStatusInfo {
   session: string | null;     // e.g. 'London' / 'New York' for forex
 }
 
+// ============================================================
+// POLYMARKET TYPES
+// ============================================================
+
+export interface PolymarketMarket {
+  id: string;
+  question: string;
+  description?: string;
+  category?: string;
+  market_slug?: string;
+  yes_token_id: string;
+  no_token_id: string;
+  yes_price: number;     // 0-1
+  no_price: number;      // 0-1
+  volume_24h: number;
+  total_volume: number;
+  active: boolean;
+  closed: boolean;
+  resolved: boolean;
+  resolution?: string;
+  end_date?: string;
+}
+
+export interface ArbOpportunity {
+  market_id: string;
+  question: string;
+  type: 'single_condition' | 'cross_platform' | 'negation_pair';
+  yes_price: number;
+  no_price: number;
+  combined_price: number;
+  profit_per_dollar: number;
+  estimated_profit: number;
+  max_size_usdc: number;
+  detected_at: string;
+}
+
+export interface PolymarketSignal {
+  id: string;
+  market_id: string;
+  question: string;
+  market_price: number;
+  agent_estimate: number;
+  edge: number;
+  swarm_std_dev: number;
+  direction: 'YES' | 'NO';
+  kelly_fraction: number;
+  position_usdc: number;
+  strategy: 'arbitrage' | 'llm_ensemble' | 'weather' | 'latency' | 'domain';
+  agent_breakdown: Record<string, number>;
+  reasoning: string;
+  executed: boolean;
+  created_at: string;
+}
+
+export interface PolymarketPosition {
+  id: string;
+  market_id: string;
+  question: string;
+  outcome: 'YES' | 'NO';
+  token_id: string;
+  size: number;
+  avg_price: number;
+  current_price: number;
+  unrealized_pnl: number;
+  status: 'OPEN' | 'CLOSED' | 'RESOLVED';
+  resolution?: string;
+  realized_pnl?: number;
+  opened_at: string;
+  closed_at?: string;
+}
+
+export interface PolymarketStats {
+  total_pnl: number;
+  win_rate: number;
+  open_positions: number;
+  best_edge: number;
+  total_deployed: number;
+  opportunities_found_today: number;
+}
+
 // ---- Generic API helpers ----
 export interface ApiResponse<T> {
   data: T;

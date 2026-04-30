@@ -27,6 +27,7 @@ import {
   ScanSearch,
   Bell,
   FlaskConical,
+  Target,
 } from 'lucide-react';
 import { useNexusStore } from '@/lib/store';
 import { useRealtimeData } from '@/hooks/useRealtimeData';
@@ -43,6 +44,7 @@ const NAV_ITEMS = [
   { href: '/commodities', label: 'Commodities', icon: Wheat },
   { href: '/indian-stocks', label: 'Indian Stocks', icon: IndianRupee },
   { href: '/us-stocks', label: 'US Stocks', icon: DollarSign },
+  { href: '/polymarket', label: 'Polymarket', icon: Target },
   { divider: true },
   { href: '/agents', label: 'Agent Network', icon: Bot },
   { href: '/risk', label: 'Risk Monitor', icon: Shield },
