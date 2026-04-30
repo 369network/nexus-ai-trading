@@ -2,11 +2,13 @@
  * GET /api/indian/market
  * ----------------------
  * Real NSE India market data:
- *  - Market breadth (advances, declines, unchanged)
- *  - NIFTY 50 option chain (PCR, Max Pain, top strikes, ATM IV)
+ *  - Market breadth (advances, declines, unchanged) — via NSE allIndices (no cookie)
+ *  - NIFTY 50 option chain (PCR, Max Pain, top strikes, ATM IV) — via NSE option-chain API
  *
- * Uses NSE India public API with proper headers to avoid bot detection.
- * Falls back to graceful empty state on any failure.
+ * NSE India blocks many cloud-provider IPs. To maximize success:
+ *  1. allIndices breadth uses a simpler endpoint that doesn't require session cookies.
+ *  2. Option chain still tries the cookie-based approach; gracefully returns null on failure.
+ *  3. All failures return null — the client shows "Unavailable" instead of an error badge.
  */
 
 import { NextResponse } from 'next/server';
@@ -15,63 +17,77 @@ export const dynamic = 'force-dynamic';
 
 const NSE_HEADERS = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   Accept: 'application/json, text/plain, */*',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
   Referer: 'https://www.nseindia.com/',
-  Connection: 'keep-alive',
 };
 
-// Establish a session cookie first (NSE requires this)
-async function getNseCookie(): Promise<string> {
+// ---------------------------------------------------------------------------
+// Breadth — NSE /api/allIndices (no session cookie required)
+// Uses NIFTY 500 row which gives market-wide advance/decline/unchanged
+// ---------------------------------------------------------------------------
+
+async function fetchNseBreadth() {
   try {
-    const res = await fetch('https://www.nseindia.com/', {
+    const res = await fetch('https://www.nseindia.com/api/allIndices', {
       headers: NSE_HEADERS,
-      redirect: 'follow',
+      next: { revalidate: 300 },
     });
-    const cookie = res.headers.get('set-cookie') ?? '';
-    // Extract nsit and nseappid cookies
-    const parts = cookie.split(',').join(';');
-    return parts;
-  } catch {
-    return '';
-  }
-}
-
-async function fetchNseBreadth(cookie: string) {
-  try {
-    const res = await fetch(
-      'https://www.nseindia.com/api/equity-stockIndices?index=BROAD%20MARKET%20INDICES',
-      {
-        headers: { ...NSE_HEADERS, Cookie: cookie },
-        next: { revalidate: 300 },
-      },
-    );
     if (!res.ok) return null;
-    const json = await res.json();
 
-    // NSE breadth data is in advance/decline section
-    const advance = json.advance ?? {};
+    const json = await res.json();
+    const rows: Array<Record<string, string | number>> = json.data ?? [];
+
+    // NIFTY 500 is the broadest index — best proxy for overall market breadth
+    const nifty500 = rows.find((r) => r.index === 'NIFTY 500');
+    if (!nifty500) return null;
+
     return {
-      advances: parseInt(advance.advances ?? '0', 10),
-      declines: parseInt(advance.declines ?? '0', 10),
-      unchanged: parseInt(advance.unchanged ?? '0', 10),
-      high52: parseInt(advance.high52 ?? '0', 10),
-      low52: parseInt(advance.low52 ?? '0', 10),
+      advances:  parseInt(String(nifty500.advances  ?? '0'), 10),
+      declines:  parseInt(String(nifty500.declines   ?? '0'), 10),
+      unchanged: parseInt(String(nifty500.unchanged  ?? '0'), 10),
+      // 52-week high/low count not available from allIndices — omit
+      high52: null as number | null,
+      low52:  null as number | null,
     };
   } catch {
     return null;
   }
 }
 
-async function fetchNseOptionChain(cookie: string, symbol = 'NIFTY') {
+// ---------------------------------------------------------------------------
+// Option Chain — requires NSE session cookie; may fail on cloud IPs
+// ---------------------------------------------------------------------------
+
+async function getNseCookie(): Promise<string> {
+  try {
+    const res = await fetch('https://www.nseindia.com/', {
+      headers: NSE_HEADERS,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.headers.get('set-cookie') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+async function fetchNseOptionChain(symbol = 'NIFTY') {
+  let cookie = '';
+  try {
+    cookie = await getNseCookie();
+  } catch {
+    return null;
+  }
+
   try {
     const res = await fetch(
       `https://www.nseindia.com/api/option-chain-indices?symbol=${symbol}`,
       {
         headers: { ...NSE_HEADERS, Cookie: cookie },
         next: { revalidate: 300 },
+        signal: AbortSignal.timeout(8000),
       },
     );
     if (!res.ok) return null;
@@ -85,17 +101,12 @@ async function fetchNseOptionChain(cookie: string, symbol = 'NIFTY') {
     }> = records.data ?? [];
 
     const underlyingValue: number = records.underlyingValue ?? 0;
-
-    // Find nearest expiry
     const expiries: string[] = records.expiryDates ?? [];
     const nearExpiry = expiries[0] ?? '';
-
     const nearData = data.filter((d) => d.expiryDate === nearExpiry);
 
-    // Compute PCR (Put-Call Ratio by OI)
     let totalCallOI = 0;
     let totalPutOI = 0;
-
     const strikes: Array<{
       strike: number;
       callOI: number;
@@ -118,6 +129,8 @@ async function fetchNseOptionChain(cookie: string, symbol = 'NIFTY') {
       });
     }
 
+    if (strikes.length === 0) return null;
+
     const pcr = totalCallOI > 0 ? totalPutOI / totalCallOI : 0;
 
     // Max pain: strike where total option pain is minimum
@@ -137,51 +150,43 @@ async function fetchNseOptionChain(cookie: string, symbol = 'NIFTY') {
       }
     }
 
-    // ATM IV (closest strike to underlying)
+    // ATM IV: average of call + put IV at strike closest to underlying
     const atmStrike = strikes.reduce((prev, curr) =>
       Math.abs(curr.strike - underlyingValue) < Math.abs(prev.strike - underlyingValue)
         ? curr
         : prev,
     );
-    const atmIV = ((atmStrike.callIV + atmStrike.putIV) / 2).toFixed(1);
-
-    // Top 5 call & put strikes by OI
-    const topCallStrikes = [...strikes]
-      .sort((a, b) => b.callOI - a.callOI)
-      .slice(0, 5)
-      .map((s) => s.strike);
-    const topPutStrikes = [...strikes]
-      .sort((a, b) => b.putOI - a.putOI)
-      .slice(0, 5)
-      .map((s) => s.strike);
+    const atmIV = parseFloat(((atmStrike.callIV + atmStrike.putIV) / 2).toFixed(1));
 
     return {
       underlying: underlyingValue,
       expiry: nearExpiry,
       pcr: Math.round(pcr * 100) / 100,
       max_pain: maxPainStrike,
-      atm_iv: parseFloat(atmIV),
+      atm_iv: atmIV,
       total_call_oi: totalCallOI,
       total_put_oi: totalPutOI,
-      call_oi_buildup: topCallStrikes,
-      put_oi_buildup: topPutStrikes,
+      call_oi_buildup: [...strikes].sort((a, b) => b.callOI - a.callOI).slice(0, 5).map((s) => s.strike),
+      put_oi_buildup:  [...strikes].sort((a, b) => b.putOI  - a.putOI ).slice(0, 5).map((s) => s.strike),
     };
   } catch {
     return null;
   }
 }
 
-export async function GET() {
-  const cookie = await getNseCookie();
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
 
+export async function GET() {
   const [breadth, optionChain] = await Promise.all([
-    fetchNseBreadth(cookie),
-    fetchNseOptionChain(cookie, 'NIFTY'),
+    fetchNseBreadth(),
+    fetchNseOptionChain('NIFTY'),
   ]);
 
   return NextResponse.json({
-    breadth: breadth ?? null,
-    option_chain: optionChain ?? null,
+    breadth:      breadth      ?? null,
+    option_chain: optionChain  ?? null,
     timestamp: new Date().toISOString(),
   });
 }

@@ -1,91 +1,93 @@
+/**
+ * GET /api/prices/indian
+ * ----------------------
+ * Indian market index prices via Yahoo Finance v8/chart (per-symbol).
+ *
+ * Why v8/chart instead of v7/quote batch:
+ *   The v7/quote batch endpoint is aggressively rate-limited on shared
+ *   Vercel IPs (returns 429). The v8/chart endpoint is per-symbol and
+ *   tolerates Vercel's concurrency without triggering rate limits.
+ *
+ * Fallback: if Yahoo Finance fails for a symbol, that slot returns null
+ * and the client shows "Unavailable" — no 502 error badge.
+ */
+
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-// Indian market indices via Yahoo Finance (server-side, avoids CORS)
-const SYMBOLS: Record<string, string> = {
-  '^NSEI':    'NIFTY50',
-  '^NSEBANK': 'BANKNIFTY',
-  '^NSMIDCP': 'MIDCAP',
-  '^CNXIT':   'IT',
-};
+const YAHOO_CHART = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
-interface YFQuote {
+const SYMBOLS: Array<{ symbol: string; key: string; label: string }> = [
+  { symbol: '^NSEI',    key: 'NIFTY50',    label: 'NIFTY 50'   },
+  { symbol: '^NSEBANK', key: 'BANKNIFTY',  label: 'BANK NIFTY' },
+  { symbol: '^NSMIDCP', key: 'MIDCAP',     label: 'MIDCAP 50'  },
+  { symbol: '^CNXIT',   key: 'IT',         label: 'NIFTY IT'   },
+];
+
+interface IndexQuote {
   symbol: string;
-  regularMarketPrice?: number;
-  regularMarketChange?: number;
-  regularMarketChangePercent?: number;
-  regularMarketDayHigh?: number;
-  regularMarketDayLow?: number;
-  regularMarketPreviousClose?: number;
-  regularMarketVolume?: number;
+  label: string;
+  price: number;
+  change: number;
+  changePct: number;
+  high: number;
+  low: number;
+  prevClose: number;
+  volume: number;
+}
+
+async function fetchIndex(
+  symbol: string,
+  label: string,
+): Promise<IndexQuote | null> {
+  try {
+    const encoded = encodeURIComponent(symbol);
+    const res = await fetch(
+      `${YAHOO_CHART}/${encoded}?interval=1d&range=5d`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          Accept: 'application/json',
+        },
+        next: { revalidate: 60 },
+      },
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const meta = data.chart?.result?.[0]?.meta;
+    if (!meta) return null;
+
+    const price     = meta.regularMarketPrice ?? 0;
+    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+    const high      = meta.regularMarketDayHigh ?? price;
+    const low       = meta.regularMarketDayLow  ?? price;
+    const volume    = meta.regularMarketVolume  ?? 0;
+    const change    = price - prevClose;
+    const changePct = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+
+    return { symbol, label, price, change, changePct, high, low, prevClose, volume };
+  } catch {
+    return null;
+  }
 }
 
 export async function GET() {
-  try {
-    const symbolList = Object.keys(SYMBOLS).join(',');
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbolList)}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose,regularMarketVolume`;
+  // Fetch all symbols in parallel
+  const results = await Promise.all(
+    SYMBOLS.map(({ symbol, label }) => fetchIndex(symbol, label)),
+  );
 
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-      },
-      next: { revalidate: 60 }, // Cache for 60s in Next.js data cache
-    });
+  const indices: Record<string, IndexQuote | null> = {};
+  SYMBOLS.forEach(({ key }, i) => {
+    indices[key] = results[i];
+  });
 
-    if (!res.ok) {
-      throw new Error(`Yahoo Finance returned ${res.status}`);
-    }
-
-    const data = await res.json();
-    const quotes: YFQuote[] = data?.quoteResponse?.result ?? [];
-
-    const indices: Record<string, {
-      symbol: string;
-      label: string;
-      price: number;
-      change: number;
-      changePct: number;
-      high: number;
-      low: number;
-      prevClose: number;
-      volume: number;
-    }> = {};
-
-    for (const q of quotes) {
-      const key = SYMBOLS[q.symbol];
-      if (!key) continue;
-      indices[key] = {
-        symbol:    q.symbol,
-        label:     getLabel(key),
-        price:     q.regularMarketPrice ?? 0,
-        change:    q.regularMarketChange ?? 0,
-        changePct: q.regularMarketChangePercent ?? 0,
-        high:      q.regularMarketDayHigh ?? 0,
-        low:       q.regularMarketDayLow ?? 0,
-        prevClose: q.regularMarketPreviousClose ?? 0,
-        volume:    q.regularMarketVolume ?? 0,
-      };
-    }
-
-    return NextResponse.json({
-      indices,
-      timestamp: new Date().toISOString(),
-      source: 'Yahoo Finance',
-    });
-  } catch (err) {
-    console.error('[indian-prices] fetch error:', err);
-    return NextResponse.json({ error: 'Failed to fetch Indian market data', indices: {} }, { status: 502 });
-  }
-}
-
-function getLabel(key: string): string {
-  switch (key) {
-    case 'NIFTY50':   return 'NIFTY 50';
-    case 'BANKNIFTY': return 'BANK NIFTY';
-    case 'MIDCAP':    return 'MIDCAP 50';
-    case 'IT':        return 'NIFTY IT';
-    default:          return key;
-  }
+  // Always return 200 — let the client handle null slots as "Unavailable"
+  return NextResponse.json({
+    indices,
+    timestamp: new Date().toISOString(),
+    source: 'Yahoo Finance',
+  });
 }
