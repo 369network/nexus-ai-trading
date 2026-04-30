@@ -1,20 +1,44 @@
+/**
+ * GET /api/polymarket/arbitrage
+ * ──────────────────────────────
+ * Returns real-time arbitrage opportunities by scanning the top 200 Gamma
+ * markets live. Opportunities exist when YES + NO combined price < 1 − fee.
+ *
+ * NOTE: Gamma API returns `outcomePrices`, `outcomes`, and `clobTokenIds`
+ *       as JSON-encoded strings — we parse them with parseJsonField().
+ */
+
 import { NextResponse } from 'next/server';
 import type { ArbOpportunity } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-const GAMMA_BASE = 'https://gamma-api.polymarket.com';
+const GAMMA_BASE   = 'https://gamma-api.polymarket.com';
+const PLATFORM_FEE = 0.02;   // 2% platform fee
 
-// Platform fee assumption (0.02 = 2%)
-const PLATFORM_FEE = 0.02;
-// Minimum profit after fees to qualify as an opportunity
-const MIN_PROFIT_THRESHOLD = 0;
+/** Gamma API may return array fields as JSON-encoded strings — normalise them. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseJsonField<T>(v: any, fallback: T): T {
+  if (v === null || v === undefined) return fallback;
+  if (Array.isArray(v)) return v as unknown as T;
+  if (typeof v === 'string') {
+    try { return JSON.parse(v) as T; } catch { return fallback; }
+  }
+  return v as T;
+}
+
+/** Safe parseFloat that returns `def` on NaN / null / undefined. */
+function safeParse(s: string | undefined | null, def: number): number {
+  if (s == null) return def;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : def;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseMarketOpportunity(raw: any): ArbOpportunity | null {
   try {
-    const outcomes: string[] = raw.outcomes ?? [];
-    const prices:   string[] = raw.outcomePrices ?? [];
+    const outcomes:  string[] = parseJsonField<string[]>(raw.outcomes,      []);
+    const prices:    string[] = parseJsonField<string[]>(raw.outcomePrices, []);
 
     if (outcomes.length < 2 || prices.length < 2) return null;
 
@@ -23,40 +47,31 @@ function parseMarketOpportunity(raw: any): ArbOpportunity | null {
     const yi = yesIdx >= 0 ? yesIdx : 0;
     const ni = noIdx  >= 0 ? noIdx  : 1;
 
-    const yesPrice = parseFloat(prices[yi] ?? '0');
-    const noPrice  = parseFloat(prices[ni] ?? '0');
+    const yesPrice = safeParse(prices[yi], -1);
+    const noPrice  = safeParse(prices[ni], -1);
 
-    if (isNaN(yesPrice) || isNaN(noPrice)) return null;
-    if (yesPrice <= 0 || noPrice <= 0)     return null;
-    // Prices should be in [0,1] for binary markets
-    if (yesPrice > 1 || noPrice > 1)       return null;
+    if (yesPrice <= 0 || noPrice <= 0) return null;
+    if (yesPrice > 1  || noPrice > 1)  return null;
 
-    const combined = yesPrice + noPrice;
-
-    // Arbitrage exists when combined < 1 - fee buffer
+    const combined        = yesPrice + noPrice;
     const profitPerDollar = 1.0 - combined - PLATFORM_FEE;
 
-    if (profitPerDollar <= MIN_PROFIT_THRESHOLD) return null;
+    if (profitPerDollar <= 0) return null;
 
-    // Estimate max tradeable size from 24h volume
-    const vol24 = parseFloat(raw.volume24hr ?? raw.volume24h ?? '0');
-    // Conservative: use 5% of 24h volume as max arb size, capped at $50k
+    const vol24       = safeParse(raw.volume24hr ?? raw.volume24h, 0);
     const maxSizeUsdc = Math.min(vol24 * 0.05, 50_000);
 
-    const question = raw.question ?? '';
-    const marketId = raw.conditionId ?? raw.id ?? '';
-
     return {
-      market_id:        marketId,
-      question,
-      type:             'single_condition',
-      yes_price:        yesPrice,
-      no_price:         noPrice,
-      combined_price:   combined,
+      market_id:         raw.conditionId ?? raw.id ?? '',
+      question:          raw.question ?? '',
+      type:              'single_condition',
+      yes_price:         yesPrice,
+      no_price:          noPrice,
+      combined_price:    combined,
       profit_per_dollar: profitPerDollar,
-      estimated_profit: profitPerDollar * maxSizeUsdc,
-      max_size_usdc:    maxSizeUsdc,
-      detected_at:      new Date().toISOString(),
+      estimated_profit:  profitPerDollar * maxSizeUsdc,
+      max_size_usdc:     maxSizeUsdc,
+      detected_at:       new Date().toISOString(),
     };
   } catch {
     return null;
@@ -74,28 +89,22 @@ export async function GET() {
 
     const res = await fetch(url.toString(), {
       headers: { 'Accept': 'application/json' },
-      // Arbitrage data is time-sensitive — short cache
-      next: { revalidate: 30 },
+      next: { revalidate: 30 },    // arb is time-sensitive
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!res.ok) {
       return NextResponse.json(
-        {
-          opportunities: [],
-          count: 0,
-          scanned: 0,
-          timestamp: new Date().toISOString(),
-          error: `Gamma API ${res.status}`,
-        },
+        { opportunities: [], count: 0, scanned: 0, timestamp: new Date().toISOString(), error: `Gamma API ${res.status}` },
         { status: 502 }
       );
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw: any[] = await res.json();
-    const markets = Array.isArray(raw) ? raw : [];
+    const rawBody: any = await res.json();
+    const markets: unknown[] = Array.isArray(rawBody) ? rawBody : (rawBody.markets ?? []);
 
-    const opportunities = markets
+    const opportunities = (markets as Parameters<typeof parseMarketOpportunity>[0][])
       .map(parseMarketOpportunity)
       .filter((o): o is ArbOpportunity => o !== null)
       .sort((a, b) => b.profit_per_dollar - a.profit_per_dollar)
@@ -110,13 +119,7 @@ export async function GET() {
   } catch (err) {
     console.error('[/api/polymarket/arbitrage]', err);
     return NextResponse.json(
-      {
-        opportunities: [],
-        count: 0,
-        scanned: 0,
-        timestamp: new Date().toISOString(),
-        error: 'Internal error',
-      },
+      { opportunities: [], count: 0, scanned: 0, timestamp: new Date().toISOString(), error: 'Internal error' },
       { status: 500 }
     );
   }
