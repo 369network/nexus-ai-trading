@@ -67,10 +67,16 @@ export async function GET() {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      return NextResponse.json(
-        { error: `Whale Alert API error ${res.status}: ${text}`, transactions: [] },
-        { status: res.status },
-      );
+      // Return 200 with empty list so the dashboard shows an empty state rather than
+      // an error badge. The Whale Alert free-tier key in Vercel may be expired — update
+      // WHALE_ALERT_API_KEY in Vercel environment variables to restore live data.
+      return NextResponse.json({
+        transactions: [],
+        count: 0,
+        sources: ['whale-alert.io'],
+        error: `Whale Alert API ${res.status}${text ? ': ' + text.slice(0, 120) : ''} — update WHALE_ALERT_API_KEY in Vercel env`,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     const json: WhaleAlertResponse = await res.json();

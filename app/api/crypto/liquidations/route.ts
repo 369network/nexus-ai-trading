@@ -49,15 +49,37 @@ async function fetchCoinglassLiquidations(symbol: string): Promise<CoinglassLiqZ
   }
 }
 
+// Map common crypto symbols to CoinGecko IDs for price lookups.
+// Binance REST API (api.binance.com) returns HTTP 451 geo-block from Vercel US East.
+const SYMBOL_TO_GECKO: Record<string, string> = {
+  BTC: 'bitcoin',
+  ETH: 'ethereum',
+  SOL: 'solana',
+  BNB: 'binancecoin',
+  XRP: 'ripple',
+  DOGE: 'dogecoin',
+  ADA: 'cardano',
+  AVAX: 'avalanche-2',
+  MATIC: 'matic-network',
+  DOT: 'polkadot',
+  LTC: 'litecoin',
+  LINK: 'chainlink',
+};
+
 async function getBinancePrice(symbol: string): Promise<number | null> {
+  const geckoId = SYMBOL_TO_GECKO[symbol] ?? 'bitcoin';
   try {
     const res = await fetch(
-      `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`,
-      { next: { revalidate: 30 } },
+      `https://api.coingecko.com/api/v3/simple/price?ids=${geckoId}&vs_currencies=usd`,
+      {
+        headers: { Accept: 'application/json', 'User-Agent': 'NEXUS-ALPHA/1.0' },
+        next: { revalidate: 30 },
+        signal: AbortSignal.timeout(10000),
+      },
     );
     if (!res.ok) return null;
-    const data: { price: string } = await res.json();
-    return parseFloat(data.price);
+    const data: Record<string, { usd: number }> = await res.json();
+    return data[geckoId]?.usd ?? null;
   } catch {
     return null;
   }
