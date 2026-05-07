@@ -1,10 +1,9 @@
 /**
- * POST /api/bot/emergency-stop
+ * POST /api/bot/paper-reset
  *
- * Server-side proxy to the VPS bot emergency-stop endpoint.
- * Avoids CORS and mixed-content issues when called from the browser.
- * Forwards to the Python bot's /control/emergency-stop endpoint (health server).
- * Uses X-Admin-Key header (matches ADMIN_API_KEY env var on VPS).
+ * Resets the VPS paper trading portfolio back to initial capital.
+ * Clears all open positions, trade history, and P&L counters.
+ * Proxies to the VPS bot's /control/paper-reset endpoint.
  */
 
 import { NextResponse } from 'next/server';
@@ -12,14 +11,13 @@ import { NextResponse } from 'next/server';
 const BOT_API_URL =
   process.env.BOT_API_URL ?? 'http://187.77.140.75:8080';
 
-// BOT_ADMIN_KEY must match ADMIN_API_KEY on the VPS
 const BOT_ADMIN_KEY = process.env.BOT_ADMIN_KEY ?? process.env.BOT_API_KEY ?? '';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
   try {
-    const res = await fetch(`${BOT_API_URL}/control/emergency-stop`, {
+    const res = await fetch(`${BOT_API_URL}/control/paper-reset`, {
       method: 'POST',
       signal: AbortSignal.timeout(10_000),
       headers: {
@@ -36,7 +34,8 @@ export async function POST() {
       );
     }
 
-    return NextResponse.json({ ok: true });
+    const data = await res.json().catch(() => ({ reset: true }));
+    return NextResponse.json({ ok: true, ...data });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ ok: false, error: msg }, { status: 503 });
