@@ -31,9 +31,12 @@ import type { Signal, FearGreedIndex } from '@/lib/types';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CRYPTO_PAIRS = [
-  { symbol: 'BTCUSDT', label: 'BTC/USDT', basePrice: 0 },
-  { symbol: 'ETHUSDT', label: 'ETH/USDT', basePrice: 0 },
-  { symbol: 'SOLUSDT', label: 'SOL/USDT', basePrice: 0 },
+  { symbol: 'BTCUSDT',  label: 'BTC/USDT',  basePrice: 0 },
+  { symbol: 'ETHUSDT',  label: 'ETH/USDT',  basePrice: 0 },
+  { symbol: 'SOLUSDT',  label: 'SOL/USDT',  basePrice: 0 },
+  { symbol: 'BNBUSDT',  label: 'BNB/USDT',  basePrice: 0 },
+  { symbol: 'XRPUSDT',  label: 'XRP/USDT',  basePrice: 0 },
+  { symbol: 'DOGEUSDT', label: 'DOGE/USDT', basePrice: 0 },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

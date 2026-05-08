@@ -48,7 +48,9 @@ export function useLivePrices(): PriceMap {
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
       try {
-        const tickers: Array<{ s: string; c: string; P: string }> = JSON.parse(event.data);
+        // !miniTicker@arr fields: s=symbol, c=close/last, o=open(24h), h=high, l=low
+        // NOTE: P (price change %) is NOT in the mini-ticker — compute it from o and c
+        const tickers: Array<{ s: string; c: string; o: string }> = JSON.parse(event.data);
         const updates: Partial<PriceMap> = {};
 
         for (const ticker of tickers) {
@@ -56,7 +58,8 @@ export function useLivePrices(): PriceMap {
           if (!meta) continue;
 
           const price = parseFloat(ticker.c);
-          const change24h = parseFloat(ticker.P);
+          const open = parseFloat(ticker.o);
+          const change24h = open > 0 ? ((price - open) / open) * 100 : 0;
 
           updates[ticker.s] = {
             symbol: ticker.s,
