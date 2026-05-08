@@ -591,7 +591,7 @@ export default function SettingsPage() {
       }
     }).catch(() => {/* use defaults */});
 
-    // Load tunable settings (weights, limits, thresholds) from DB
+    // Load tunable settings (weights, limits, thresholds, api_keys, telegram) from DB
     fetch('/api/settings')
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
@@ -614,6 +614,16 @@ export default function SettingsPage() {
             return saved ? { ...t, value: saved.value } : t;
           }));
         }
+        // Load API keys from DB (overrides localStorage if present)
+        if (data.api_keys && typeof data.api_keys === 'object') {
+          const dbKeys = data.api_keys as SavedApiKeys;
+          setSavedKeys((prev) => {
+            const merged = { ...prev, ...dbKeys };
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+        // Telegram config loaded via TelegramNotificationsPanel's own fetch
       })
       .catch(() => {/* keep defaults */});
   }, []);
@@ -640,17 +650,23 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const handleSaveKeys = useCallback((serviceId: string, keys: Record<string, string>) => {
-    setSavedKeys((prev) => {
-      const next = { ...prev, [serviceId]: keys };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-    setSaveNotice('Keys saved locally (browser only — never sent to any server)');
+  const handleSaveKeys = useCallback(async (serviceId: string, keys: Record<string, string>) => {
+    const next = { ...savedKeys, [serviceId]: keys };
+    setSavedKeys(next);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
+    setSaveNotice('Saving…');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_keys: next }),
+      });
+      setSaveNotice(res.ok ? 'Keys saved to database ✓' : 'Saved locally (DB write failed)');
+    } catch {
+      setSaveNotice('Saved locally (server unreachable)');
+    }
     setTimeout(() => setSaveNotice(''), 4000);
-  }, []);
+  }, [savedKeys]);
 
   const handleTestConnection = useCallback(async (service: ApiServiceConfig, keys: Record<string, string>) => {
     setStatuses((prev) => ({ ...prev, [service.id]: { status: 'testing' } }));
@@ -941,7 +957,8 @@ export default function SettingsPage() {
         </div>
 
         <p className="text-xs text-muted mb-4">
-          API keys are stored only in your browser (localStorage). They are never sent to any server.
+          API keys are saved to your Supabase database and cached locally in your browser.
+          They persist across devices and browser sessions.
           Click any service to expand and enter your credentials.
         </p>
 
@@ -966,11 +983,12 @@ export default function SettingsPage() {
         </div>
 
         <div className="mt-4 p-3 bg-nexus-yellow/5 border border-nexus-yellow/20 rounded-lg">
-          <p className="text-xs text-nexus-yellow font-medium mb-1">For live trading, also configure keys on the VPS</p>
+          <p className="text-xs text-nexus-yellow font-medium mb-1">Keys saved here are for the dashboard only</p>
           <p className="text-xs text-muted">
-            Dashboard keys are for reference only. The trading bot reads its keys from{' '}
+            Keys entered here are persisted in your Supabase database. The trading bot reads its keys
+            directly from{' '}
             <code className="font-mono bg-background px-1 py-0.5 rounded">/opt/nexus-alpha/.env</code>{' '}
-            on the VPS. Update that file to activate keys for live execution.
+            on the VPS — update that file to activate keys for live execution.
           </p>
         </div>
       </div>
@@ -1017,9 +1035,11 @@ function TelegramNotificationsPanel() {
   const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
   const [testError, setTestError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // Load from localStorage
+  // Load from localStorage first, then sync from DB
   useEffect(() => {
+    // 1. Restore from localStorage immediately (fast)
     try {
       const raw = localStorage.getItem(TELEGRAM_STORAGE_KEY);
       if (raw) {
@@ -1031,14 +1051,43 @@ function TelegramNotificationsPanel() {
         }));
       }
     } catch {}
+
+    // 2. Sync from DB (authoritative, overrides localStorage if different)
+    fetch('/api/settings')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (!data?.telegram) return;
+        const tg = data.telegram as Partial<TelegramConfig>;
+        setConfig((prev) => {
+          const merged = {
+            ...prev,
+            ...tg,
+            events: { ...prev.events, ...(tg.events ?? {}) },
+          };
+          try { localStorage.setItem(TELEGRAM_STORAGE_KEY, JSON.stringify(merged)); } catch {}
+          return merged;
+        });
+      })
+      .catch(() => {});
   }, []);
 
-  const save = () => {
+  const save = async () => {
+    // Always persist to localStorage first
+    try { localStorage.setItem(TELEGRAM_STORAGE_KEY, JSON.stringify(config)); } catch {}
+    setSaving(true);
     try {
-      localStorage.setItem(TELEGRAM_STORAGE_KEY, JSON.stringify(config));
-      setSaved(true);
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram: config }),
+      });
+      setSaved(res.ok);
+    } catch {
+      setSaved(true); // show "Saved" since localStorage succeeded
+    } finally {
+      setSaving(false);
       setTimeout(() => setSaved(false), 3000);
-    } catch {}
+    }
   };
 
   const sendTest = async () => {
@@ -1110,7 +1159,7 @@ function TelegramNotificationsPanel() {
         >
           Create a bot via @BotFather
         </a>
-        . Your token is stored only in your browser.
+        . Config is saved to your Supabase database and synced across sessions.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
@@ -1220,14 +1269,20 @@ function TelegramNotificationsPanel() {
 
         <button
           onClick={save}
+          disabled={saving}
           className={cn(
             'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
             saved
               ? 'bg-nexus-green/20 text-nexus-green border border-nexus-green/30'
-              : 'bg-border text-white hover:bg-border-bright border border-border'
+              : 'bg-border text-white hover:bg-border-bright border border-border disabled:opacity-50'
           )}
         >
-          {saved ? <><CheckCircle2 size={13} /> Saved</> : <><Save size={13} /> Save Config</>}
+          {saving
+            ? <><Loader2 size={13} className="animate-spin" /> Saving…</>
+            : saved
+              ? <><CheckCircle2 size={13} /> Saved to DB ✓</>
+              : <><Save size={13} /> Save Config</>
+          }
         </button>
       </div>
 
