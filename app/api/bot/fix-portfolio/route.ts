@@ -1,11 +1,12 @@
 /**
  * POST /api/bot/fix-portfolio
  *
- * ONE-TIME FIX: Inserts a clean portfolio snapshot into Supabase so the VPS
- * paper-trading bot restores $10,000 initial capital on next restart.
+ * Full paper-trading reset in Supabase:
+ *  1. Cancels ALL old OPEN paper trades (stale entries that poison portfolio restore)
+ *  2. Inserts a fresh portfolio_snapshot with $10,000 initial capital
  *
- * Also clears old 0-balance snapshots that were causing the $0 display.
- * Safe to call multiple times — uses upsert pattern.
+ * After calling this, restart the VPS bot — it will start with $10,000 and no
+ * stale positions. Safe to call multiple times.
  */
 
 import { NextResponse } from 'next/server';
@@ -30,7 +31,41 @@ export async function POST() {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    // 1. Insert a fresh portfolio snapshot with proper initial capital
+    // ── Step 1: Cancel all stale OPEN paper trades ─────────────────────────
+    // These are what caused the bot to restore 250+ old positions and show -99% drawdown.
+    const { data: openTrades, error: fetchErr } = await supabase
+      .from('trades')
+      .select('id, symbol, entry_price, quantity')
+      .eq('status', 'OPEN')
+      .eq('execution_mode', 'paper');
+
+    if (fetchErr) {
+      return NextResponse.json(
+        { ok: false, error: `Failed to fetch open trades: ${fetchErr.message}` },
+        { status: 500 },
+      );
+    }
+
+    const openCount = openTrades?.length ?? 0;
+
+    if (openCount > 0) {
+      const { error: cancelErr } = await supabase
+        .from('trades')
+        .update({ status: 'CANCELLED', closed_at: new Date().toISOString() })
+        .eq('status', 'OPEN')
+        .eq('execution_mode', 'paper');
+
+      if (cancelErr) {
+        return NextResponse.json(
+          { ok: false, error: `Failed to cancel open trades: ${cancelErr.message}` },
+          { status: 500 },
+        );
+      }
+    }
+
+    // ── Step 2: Insert a clean portfolio snapshot ──────────────────────────
+    // Bot's _restore_state_from_db does: ORDER BY created_at DESC LIMIT 1
+    // So inserting now means the bot picks this up on next restart.
     const { error: insertErr } = await supabase
       .from('portfolio_snapshots')
       .insert({
@@ -48,20 +83,17 @@ export async function POST() {
 
     if (insertErr) {
       return NextResponse.json(
-        { ok: false, error: `Insert failed: ${insertErr.message}` },
+        { ok: false, error: `Snapshot insert failed: ${insertErr.message}` },
         { status: 500 },
       );
     }
 
-    // 2. Archive old zero-balance snapshots (mark equity = 0 rows as stale)
-    //    We can't delete them, but we inserted a newer one above that will be
-    //    picked up by the bot's ORDER BY created_at DESC LIMIT 1 query.
-
     return NextResponse.json({
-      ok: true,
-      message: `Clean portfolio snapshot inserted: equity=$${INITIAL_CAPITAL.toLocaleString()}`,
-      initial_capital: INITIAL_CAPITAL,
-      note: 'Restart the VPS bot to apply — it will restore $10,000 from this snapshot.',
+      ok:              true,
+      trades_cancelled: openCount,
+      initial_capital:  INITIAL_CAPITAL,
+      message: `Reset complete: ${openCount} stale OPEN trades cancelled, fresh $${INITIAL_CAPITAL.toLocaleString()} snapshot inserted.`,
+      next_step: 'Restart the VPS bot — it will now start with $10,000 and 0 positions.',
       timestamp: new Date().toISOString(),
     });
   } catch (err: unknown) {
