@@ -48,29 +48,20 @@ function useForexPrices() {
 
     const fetchRates = async () => {
       try {
-        // Current rates
-        const res = await fetch('https://api.frankfurter.app/latest?base=USD&symbols=EUR,GBP,JPY,CHF,AUD,CAD,NZD');
+        const res = await fetch('/api/forex/rates', { cache: 'no-store' });
         const data = await res.json();
-
-        // Yesterday rates for 24h change
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-        const resY = await fetch(`https://api.frankfurter.app/${yesterday}?base=USD&symbols=EUR,GBP,JPY,CHF,AUD,CAD,NZD`);
-        const dataY = await resY.json();
+        const pairsData: Record<string, { price: number; change: number }> = data.pairs ?? {};
 
         const mapped = DEFAULT_PAIRS.map((p) => {
-          const rate = data.rates[p.quote];
-          const rateY = dataY.rates?.[p.quote] ?? rate;
-          const price = p.invert ? 1 / rate : rate;
-          const priceY = p.invert ? 1 / rateY : rateY;
-          const change = ((price - priceY) / priceY) * 100;
+          const entry = pairsData[p.symbol] ?? { price: 1, change: 0 };
           return {
             symbol: p.symbol,
-            price: parseFloat(price.toFixed(p.symbol === 'USDJPY' ? 3 : 5)),
-            change: parseFloat(change.toFixed(3)),
+            price: entry.price,
+            change: entry.change,
             spread: getSpreadLabel(p.symbol),
-            pip: parseFloat((price - 0.0001).toFixed(5)),
+            pip: parseFloat((entry.price - 0.0001).toFixed(5)),
           };
-        });
+        }).filter((p) => p.price > 0);
         setPairs(mapped);
         setLoading(false);
       } catch {
@@ -370,12 +361,6 @@ export default function ForexPage() {
 
   return (
     <div className="space-y-4">
-      {/* Header with attribution */}
-      <div className="flex items-center justify-between px-1">
-        <span />
-        <span className="text-xs text-muted">Rates via Frankfurter.app</span>
-      </div>
-
       {/* Session clocks */}
       <SessionClock sessions={FOREX_SESSIONS} />
 

@@ -183,36 +183,26 @@ async function fetchCryptoData(
   };
 }
 
-// Frankfurter returns base=EUR rates; we invert/compute needed pairs
-async function fetchForexData(symbol: string): Promise<{ price: number; change: number }> {
-  // Today + yesterday
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const fmtDate = (d: Date) => d.toISOString().split('T')[0];
+// Cached forex rates from our server-side proxy (avoids browser-level Frankfurter failures)
+let _forexRatesCache: { data: Record<string, { price: number; change: number }>; ts: number } | null = null;
 
-  const [latestRes, prevRes] = await Promise.all([
-    fetch(`https://api.frankfurter.app/latest`, { cache: 'no-store' }),
-    fetch(`https://api.frankfurter.app/${fmtDate(yesterday)}`, { cache: 'no-store' }),
-  ]);
-  if (!latestRes.ok || !prevRes.ok) throw new Error('Frankfurter error');
-  const latest = await latestRes.json();
-  const prev   = await prevRes.json();
-
-  // Rates are relative to EUR (base). Derive cross rates.
-  function getRate(sym: string, rates: Record<string, number>): number {
-    if (sym === 'EURUSD') return rates['USD'];
-    if (sym === 'GBPUSD') return rates['USD'] / rates['GBP'];
-    if (sym === 'USDJPY') return rates['JPY'];
-    if (sym === 'AUDUSD') return rates['USD'] / rates['AUD'];
-    return 0;
+async function getForexRates(): Promise<Record<string, { price: number; change: number }>> {
+  if (_forexRatesCache && Date.now() - _forexRatesCache.ts < 60_000) {
+    return _forexRatesCache.data;
   }
+  const res = await fetch('/api/forex/rates', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`forex/rates HTTP ${res.status}`);
+  const json = await res.json();
+  const data = json.pairs as Record<string, { price: number; change: number }>;
+  _forexRatesCache = { data, ts: Date.now() };
+  return data;
+}
 
-  const latestRate = getRate(symbol, latest.rates);
-  const prevRate   = getRate(symbol, prev.rates);
-  if (!latestRate) throw new Error(`No rate for ${symbol}`);
-  const change = ((latestRate - prevRate) / prevRate) * 100;
-  return { price: latestRate, change };
+async function fetchForexData(symbol: string): Promise<{ price: number; change: number }> {
+  const rates = await getForexRates();
+  const entry = rates[symbol];
+  if (!entry || entry.price === 0) throw new Error(`No rate for ${symbol}`);
+  return entry;
 }
 
 async function fetchCommodityData(symbol: string): Promise<{ price: number; change: number }> {
@@ -942,7 +932,7 @@ export default function ScannerPage() {
 
       {/* ── Footer note ── */}
       <p className="text-xs text-muted/60 text-center pb-2">
-        Crypto: Binance API &nbsp;|&nbsp; Forex: Frankfurter &nbsp;|&nbsp; Metals: metals.live &nbsp;|&nbsp; Indices: stooq.com
+        Crypto: Binance API &nbsp;|&nbsp; Forex: Frankfurter (server proxy) &nbsp;|&nbsp; Metals: metals.live &nbsp;|&nbsp; Indices: stooq.com
         &nbsp;· Signal logic is for informational purposes only and does not constitute financial advice.
       </p>
     </div>
