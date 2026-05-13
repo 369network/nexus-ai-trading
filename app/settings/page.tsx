@@ -787,9 +787,12 @@ export default function SettingsPage() {
       <div className="grid grid-cols-2 gap-6">
         {/* Feature Flags */}
         <div className="nexus-card p-5">
-          <div className="flex items-center gap-2 mb-5">
-            <Settings size={16} className="text-nexus-blue" />
-            <h2 className="font-semibold text-white">Feature Flags</h2>
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2">
+              <Settings size={16} className="text-nexus-blue" />
+              <h2 className="font-semibold text-white">Feature Flags</h2>
+            </div>
+            <span className="text-xs text-muted italic">Auto-saves on toggle</span>
           </div>
           <div className="space-y-5">
             {Object.entries(flagsByCategory).map(([category, categoryFlags]) => (
@@ -813,27 +816,32 @@ export default function SettingsPage() {
 
         {/* Right column: LLM Weights + Risk Limits */}
         <div className="space-y-4">
-          {/* Save bar — shown when settings are modified */}
-          {(settingsDirty || settingsSaveMsg) && (
-            <div className={cn(
-              'flex items-center justify-between gap-3 rounded-lg px-4 py-2.5 text-sm border',
-              settingsSaveMsg.includes('✓')
-                ? 'bg-nexus-green/5 border-nexus-green/30 text-nexus-green'
-                : 'bg-nexus-yellow/5 border-nexus-yellow/30 text-nexus-yellow'
-            )}>
-              <span>{settingsSaveMsg || 'Unsaved changes'}</span>
-              {settingsDirty && (
-                <button
-                  onClick={saveSettings}
-                  disabled={settingsSaving}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-nexus-blue text-white text-xs font-medium hover:bg-nexus-blue/80 disabled:opacity-50 transition-colors"
-                >
-                  {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                  {settingsSaving ? 'Saving…' : 'Save to DB'}
-                </button>
+          {/* Save bar — always visible */}
+          <div className={cn(
+            'flex items-center justify-between gap-3 rounded-lg px-4 py-2.5 text-sm border',
+            settingsSaveMsg.includes('✓')
+              ? 'bg-nexus-green/5 border-nexus-green/30 text-nexus-green'
+              : settingsDirty
+                ? 'bg-nexus-yellow/5 border-nexus-yellow/30 text-nexus-yellow'
+                : 'bg-white/3 border-border text-muted'
+          )}>
+            <span>
+              {settingsSaveMsg || (settingsDirty ? 'Unsaved changes' : 'All settings saved')}
+            </span>
+            <button
+              onClick={saveSettings}
+              disabled={settingsSaving}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors',
+                settingsDirty
+                  ? 'bg-nexus-blue text-white hover:bg-nexus-blue/80 disabled:opacity-50'
+                  : 'bg-border text-muted hover:bg-nexus-blue hover:text-white'
               )}
-            </div>
-          )}
+            >
+              {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {settingsSaving ? 'Saving…' : 'Save Config'}
+            </button>
+          </div>
 
           <div className="nexus-card p-5">
             <div className="flex items-center justify-between mb-5">
@@ -908,16 +916,19 @@ export default function SettingsPage() {
             <AlertTriangle size={16} className="text-nexus-red" />
             <h2 className="font-semibold text-white">Circuit Breaker Thresholds</h2>
           </div>
-          {settingsDirty && (
-            <button
-              onClick={saveSettings}
-              disabled={settingsSaving}
-              className="flex items-center gap-1.5 px-3 py-1 rounded bg-nexus-blue text-white text-xs font-medium hover:bg-nexus-blue/80 disabled:opacity-50 transition-colors"
-            >
-              {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              Save
-            </button>
-          )}
+          <button
+            onClick={saveSettings}
+            disabled={settingsSaving}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-colors',
+              settingsDirty
+                ? 'bg-nexus-blue text-white hover:bg-nexus-blue/80 disabled:opacity-50'
+                : 'bg-border text-muted hover:bg-nexus-blue hover:text-white'
+            )}
+          >
+            {settingsSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+            Save Config
+          </button>
         </div>
         <div className="grid grid-cols-5 gap-4">
           {thresholds.map((t) => (
